@@ -1,8 +1,8 @@
  #!/usr/bin/env perl
  
  ### Author : Mathieu Flamand - Duke University
- ### version : 1.3.1
- ### date of last modification : 2021-11-8
+ ### version : 1.3.2
+ ### date of last modification : 2022-3-3
  
 ### This programs identifies editing sites by comparing a DART/TRYBE matrix to a control matrix file or to the genomic sequence. 
 ### For strand information, a refFlat file is provided, sites found within annotated features will be  idenitified according to provided settings.
@@ -26,9 +26,9 @@ my $USAGE = "$0 --annotationFile refFlat --EditedMatrix DART_RNA_matrix --contro
 my ($annotationfile,$known_sites, $tablename, $ControlTableName, $OUTFILE, $verbose, $help, $bed_option,$barcode_option, $intron_flag, $genome,$extUTR,$dbFasta,$fallback,$score,$bed_flag)='';
 my @bedfiles;
 
-##########################################################
+
 ### Read environmental variable for slurm task manager ###
-##########################################################
+# if you are not running with SLURM, CPU and available memory can be set with the --cpu #core and --mem 4096 (in Megabytes)
 my $memory = $ENV{'SLURM_MEM_PER_NODE'} // 4096; #4G default for Duke nodes 
 my $ncpu= $ENV{'SLURM_CPUS_PER_TASK'} // 1;
 
@@ -57,6 +57,7 @@ GetOptions ("a|annotationFile:s"=>\$annotationfile,
 			"bed6"=>\$bed_option,
 			"SingleCell|bc|barcode"=>\$barcode_option,
 			"cpu=i"=>\$ncpu,
+			"mem=i"=>\$memory,
 			"me|MinEditSites=i"=>\$min_edit_site,
 			"intron"=>\$intron_flag,
 			"genome=s"=>\$genome,
@@ -69,15 +70,12 @@ GetOptions ("a|annotationFile:s"=>\$annotationfile,
 		) or error_out();
 
 
-# if help is need to remember how to run the 
-if ( $help ) { error_out(); } ### help incorporate in next block
-
+# Error checking before running
+if ( $help ) { error_out(); } 
 if ($annotationfile and $known_sites){
 	say STDERR "Error, please choose either a refflat annotation file (-a) or bed file with known sites (--bedfile), not both";
 	error_out();
 }
-
-# if arguments are missing, print list of arguments and exit ### does not check for tp since they may be 0 wich would crash the program
 if($ControlTableName and $genome){
 	say STDERR "Error, please choose either a control matrix file (-c) or a fasta file (-g), not both";
 	error_out();
@@ -86,20 +84,21 @@ unless(($annotationfile or $known_sites) && $tablename && ($ControlTableName or 
 	say STDERR "Error. Please provide at least an annotation file, an edited matrix and a control matrix or genome file";
 	error_out();
 }
-
 if($fallback and $genome){
 	say STDERR "\n fallback and genome options cannot be used at the same time. plase select one or the other\n";
 	error_out();
 }
-
-### check for all files before proceeding ###
 if($annotationfile and ! -f $annotationfile){say "Error. Annotation file $annotationfile could not be found";exit();}
 if($known_sites and ! -f $known_sites){say "Error. Annotation file $known_sites could not be found";exit();}
 unless(-f $tablename){say "Error, could not find edited matrix $tablename";exit();}
 if(! $genome and ! -f $ControlTableName){say "Error, could not find control matrix $ControlTableName";exit();}
 if($genome and !(-f $genome or -d $genome)){say "Error, could not find genome file $genome";exit();}
 if($fallback and !(-f $fallback or -d $fallback)){say "Error, could not find genome file $fallback";exit();}
-###		
+
+unless ($experiment =~ /[ACUTG]2[ACTGUI]/i){
+	say "Error. the type of experiment provided did not meet requierements. Please use the following format :C2U, A2I ...\n";
+	error_out();
+}
 
 ### check which type of chr in annotation file
 my $annotation_stem ="";
@@ -110,7 +109,6 @@ my $table_stem = check_chr($tablename, 0);
 if ($table_stem =~ /^chr/i and ! $annotation_stem =~ /^chr/i){say "Error, annotation file and matrix files do not have the same chromosome annotation. Cannot match UCSC or Ensembl style."; exit();}
 
 ### Parse options ###
-
 #initialize db if needed
 my $genome_stem='';
 if ($genome) {
@@ -123,14 +121,8 @@ if ($fallback) {
 	my @IDs = $dbFasta->get_all_primary_ids;
 	if( $IDs[0] =~/^chr/){$genome_stem = 'chr';}
 }
-
 if($genome or $fallback){
 	if ($table_stem =~ /^chr/i and $genome_stem ne 'chr'){say "Error, genome file and matrix files do not have the same chromosome annotation. Cannot match UCSC or Ensembl style."; exit();}
-}
-
-unless ($experiment =~ /[ACUTG]2[ACTGUI]/i){
-	say "Error. the type of experiment provided did not meet requierements. Please use the following format :C2U, A2I ...\n";
-	error_out();
 }
 
 say "processing using $ncpu cpu cores" if $verbose; 
@@ -163,7 +155,6 @@ if ($verbose){
 }
 
 # select default option for scoring
-
 if( length $score && $score == 0){
 	$score = 1; #minimum ratio for comparing Dart to Control
 }
@@ -172,7 +163,6 @@ say "Scoring will be done with following ratio : $score" if ($verbose and $score
 
 ## manage different options for output files and formats
 my $out_fh;
-
 if ($OUTFILE){
 	$OUTFILE =~ /(.+)\.[^.]+$/;
 	my $path_name = $1;
@@ -192,14 +182,13 @@ else{ ## if not output file given
 
 
 ### Start processing ###
-
-### read bed files for filtering of known SNPs or background dataset
+### Here we are reading an optional bed files which contains known SNPs or regions to be excluded
+### several file can be provided, all regions will be added to the same hash table, strand is not considered for filtering these regions
 my $excluded_sites={};
 if (@bedfiles){
 	say "sites in files: @bedfiles will not be considered in analysis";# if $verbose;
 	foreach my $files (@bedfiles){
 	my $bed_stem = check_chr($files,0);
-
 	if ($bed_stem =~ /^chr/i and ! $annotation_stem =~ /^chr/i){say "Error, annotation file and bed files do not have the same chromosome annotation. Cannot match UCSC or Ensembl style."; exit();}
 	
 	open(my $fh, "<",  $files);
@@ -207,7 +196,6 @@ if (@bedfiles){
 			next if $_=~/^[\#\n]/;
 			my($chr,$start,$end,$strand) = (split("\t",$_))[0,1,2,5];
 			foreach my $pos ($start+1..$end){
-				# $excluded_sites->{$chr}->{$pos}->{$strand}=1;
 				$excluded_sites->{$chr}->{$pos}=1;
 			}
 		}
@@ -216,9 +204,12 @@ if (@bedfiles){
 
 
 ## open annotation filehandle and store in %genes
+## there a 2 options: 
+## 1) with knownsites option: find sites in the region found in the provided bed file. 
+## 2) look in all exons found in a refFlat file. Use --intron to detect in introns. --extUTR to extend 3'UTR for coding RNAs only.
+## Sites will be annotated from this gtf file. Priority is given as: 1(low): extended 3'UTR 2 : Introns 3: ncRNA 4: 5'UTR, 5: 3'UTR 6(high) : CDS	
 
-my $genes = {};# build hash reference
-
+my $genes = {};
 if($known_sites){
 	open(my $annotation_handle,"<", $known_sites) or die "Can't open $known_sites: $!\n";  
 
@@ -257,9 +248,6 @@ print STDERR "loading annotation file $annotationfile... " if $verbose;
 
 		my @intronStart;
 		my @intronEnds;
-
-		# To annotate each site as best as possible, a hierachy of positions is set as :
-		# 1: extUTR 2 : Introns 3: ncRNA 4: 5'UTR, 5: 3'UTR 6 : CDS	
 		
 		if ($intron_flag and $contain_introns)	{
 			my @intronStart;
@@ -337,9 +325,7 @@ print STDERR "loading annotation file $annotationfile... " if $verbose;
 				
 				if($starts[$i] < $cdsStart){ $type = $strand eq "+" ? "5UTR" : "3UTR" ;}
 				if($starts[$i] > $cdsEnd){ $type = $strand eq "+" ? "3UTR" : "5UTR" ;}
-
 			}
-
 			if ($type eq "ncRNA"){
 				$genes->{'3'}->{$chr}->{$trxid}->{length} = $length;
 				$genes->{'3'}->{$chr}->{$trxid}->{$starts[$i]} = {END=>$ends[$i],ID=>$gene,STRAND=>$strand, TYPE=>$type};
@@ -361,15 +347,13 @@ print STDERR "loading annotation file $annotationfile... " if $verbose;
 	close $annotation_handle;
 }
 
-# close $annotation_handle;
-# say STDERR "done!" if $verbose;
-
 my ($control_stem, $control_file_list);
 my ($dart_stem, $dart_file_list);
 my $index_list = {};
+
+## When using a control dataset, we verify that the matrix file exist and is indexed. Then we extract the name of all chromosomes.   
 unless ($genome)
 {
-	#split control file by chromosomes
 	if (-f $ControlTableName and $ControlTableName =~ /\.gz$/ and -e "$ControlTableName.tbi"){
 		open(my $index, "tabix --list-chroms $ControlTableName |") or die "Failed to read index of $ControlTableName";
 		while(<$index>){chomp;$index_list->{'control'}->{$_}=1;}
@@ -380,7 +364,7 @@ unless ($genome)
 	}
 }
 
-#split DART file by chromosomes
+## we do the same for the actual matrix
 if (-f $tablename and $tablename =~ /\.gz$/ and -e "$tablename.tbi"){
 	open(my $index, "tabix --list-chroms $tablename |") or die "Failed to read index of $tablename";
 	while(<$index>){chomp;$index_list->{'DART'}->{$_}=1;}
@@ -390,6 +374,7 @@ else{
 	error_out();
 }
 
+# we will look in all chromosomes that have a least 1 ORF in the refFlat file or is in the knownsite bed file
 my @chr_list = sort keys %{$genes->{'6'}};
 
 MCE::Loop->init(
@@ -407,14 +392,18 @@ MCE::Loop->init(
 	},
 );
 
+## This anonymous sub will do the heavy lifting, splitting the work for each chromosome
+## 1) we define genomic ranges containing features of interest on each strand of the chromosome using Array::IntSpan
+## 2) We read the matrix file in parallel with a control matrix file and/or a handle to an indexed fasta file
+## 3) We identitify to editing sites with the find_site() sub. These sites a printed to the output file
+## 4) the sites found in the exluded file(s) are returned from the sub.
+
 my @filtered_sites = mce_loop
 {
 	my ($mce, $chunk_ref, $chunk_id)=@_;
 	my $chr = $_;
 	
 	my @bad_sites;
-
-	#open filehandles for contol and dart files	and return if they don't exist. avoids extra processing before reading %gene
 	my ($control_fh, $dart_fh);
 		
 	unless ($genome){
@@ -487,11 +476,11 @@ my @filtered_sites = mce_loop
 
 		#case when edit coordinate is lower than control - meaning no coverage in control for this position
 		if($ecoord < $ccoord and not $dart_flag or $control_flag){
-			($dart_line, $dart_flag) = read_matrix_line($dart_fh, $last_dart_line); # read next line
+			($dart_line, $dart_flag) = read_matrix_line($dart_fh, $last_dart_line);
 		}
 		#case when control coordinates are lower than edit - no coverage at given position - read next line
 		elsif(($ecoord > $ccoord and not $control_flag or $dart_flag) and not $genome){
-			($control_line, $control_flag) = read_matrix_line($control_fh, $last_control_line); # read next line
+			($control_line, $control_flag) = read_matrix_line($control_fh, $last_control_line); 
 		}
 		#case when both lines are the same coordinate
 		else{
@@ -507,14 +496,13 @@ my @filtered_sites = mce_loop
 				push(@outline, $barcode) if $barcode_option; # add barcode when processing them
 				my $result = join("\t", @outline);
 				
-				# if (defined $excluded_sites->{$chr}->{$ecoord}->{$strand})
 				if (defined $excluded_sites->{$chr}->{$ecoord})	{
 					push(@bad_sites, $result);
 				}
 				else{	
 					MCE->say ($out_fh, $result);
 				}
-			@outline = (); #clear array to look on negative strand
+			@outline = ();
 			}
 			if (defined $pos_array_rev->lookup($ecoord)){
 				my $strand = "-";
@@ -525,11 +513,9 @@ my @filtered_sites = mce_loop
 			if (@outline){
 				my $strand = $outline[5];
 				push(@outline, $barcode) if $barcode_option;
-
-				
+		
 				my $result = join("\t", @outline);
-				
-				# if (defined $excluded_sites->{$chr}->{$ecoord}->{$strand})
+
 				if (defined $excluded_sites->{$chr}->{$ecoord}){
 					push(@bad_sites, $result);
 				}
@@ -542,7 +528,6 @@ my @filtered_sites = mce_loop
 			$dart ={};
 			$control = {};			
 			
-			#($control_line, $control_flag) = read_matrix_line($control_fh, $last_control_line); # read next line
 			($dart_line, $dart_flag) = read_matrix_line($dart_fh, $last_dart_line); # read next line
 
 		}
@@ -551,16 +536,15 @@ my @filtered_sites = mce_loop
 		$last_dart_line = $dart_line;
 
 	}
-	
 	close ($dart_fh);
 	delete $excluded_sites->{$chr} if defined $excluded_sites->{$chr};
-	delete $genes->{$chr}; # remove from table once done processed
+	delete $genes->{$chr}; 
 	MCE->gather(@bad_sites);
 	MCE->exit(42, "$chr");
 }\@chr_list;
 
+# sort output files and pritn excluded_sites if necessary
 if ($OUTFILE){
-	
 	$OUTFILE =~ /(.+)\.[^.]+$/;
 	my $path_name = $1;
 	my $out_file= "$path_name".".bed";
@@ -640,26 +624,27 @@ USAGE::BLOCK
 
 }
 
-#subroutine to read next matrix line
+## subroutine to read next matrix line
+## we take in the filehandle and the valid last line. We return the next line and the 0 flag. If end of file is reached, we return last line and the 1 FLAG. 
 sub read_matrix_line {
 	my $fh = shift @_;
 	my $last_line = shift @_;
-	my $min_cov = shift @_;
-	
+		
 	if ($fh and my $line = <$fh>){
 		chomp $line;
 		return ($line,"0");
 	}
 	else{
-		return ($last_line,"1"); # This will return the last line of again if eof is reached
+		return ($last_line,"1"); 
 	}
 }
 
+## subroutine to read matrix line
+## We read 1 line, and return a hash reference containing the number of nucleotide at a given position
 sub load_line {
 	my $line = shift @_;
 	my %hash;
-	my($coord, $A, $T, $C, $G,$N, $total) = (split(/\t/, $line))[1,2,3,4,5,6,7];
-
+	my($coord, $A, $T, $C, $G, $N, $total) = (split(/\t/, $line))[1,2,3,4,5,6,7];
 	$hash{$coord}{A} = $A;
 	$hash{$coord}{T} = $T;
 	$hash{$coord}{C} = $C;
@@ -669,6 +654,9 @@ sub load_line {
 	return (\%hash,$coord);
 }
 
+## Main function to identify edit sites
+## This subroutine reads in the current position, strand, data from matrix files and chromosomal sequence if option was used. 
+## it finds sites with passing the coverage threshold, mutation thresholds and fold over controls. Optionally return score based on beta distribution
 sub find_sites {
 	#my ($chr, $ID, $bp, $strand, $control, $dart, $dbFasta) = @_;
 	
@@ -686,15 +674,14 @@ sub find_sites {
 	my $dart_non_edit = ($strand eq '+') ? $dart->{$bp}->{$noneditbase} : $dart->{$bp}->{$noneditbaseREV}; 
 	my $dart_edit = ($strand eq '+') ? $dart->{$bp}->{$editbase} : $dart->{$bp}->{$editbaseREV}; 
 	
-	return if ($dart_non_edit + $dart_edit == 0); # prevents possible divisions by 0
+	return if ($dart_non_edit + $dart_edit == 0); 
 	return unless ($dart_edit >= $min_edit_site);
 
 	#edit for output
 	my $dart_total = $dart->{$bp}->{total} - $dart->{$bp}->{N};
 	return if  $dart_total < $Edited_mincovthresh;
-	# my $dart_edit_ratio = $dart_edit / ($dart_non_edit + $dart_edit);
 	my $dart_edit_ratio = $dart_edit / $dart_total;
-	return if ($dart_edit_ratio < $low_thresh or $dart_edit_ratio > $high_thresh);   # if the ratio is smaller than threshold, skip
+	return if ($dart_edit_ratio < $low_thresh or $dart_edit_ratio > $high_thresh);   
 	my $dart_edit_ratio_out = sprintf( "%.4f", $dart_edit_ratio);
 
 	my $dart_edit_conf;
@@ -731,13 +718,10 @@ sub find_sites {
 	return if $control_non_edit / $control_total < 0.60; 
 
 	#edit for output
-	# my $control_edit_ratio = $control_edit / ($control_non_edit + $control_edit);
 	my $control_edit_ratio = $control_edit / $control_total;
 	return if ($control_edit_ratio > 0.0 && $dart_edit_ratio/$control_edit_ratio < $WToverKO ); ## this is hard cutoff for edit DART/mut
 
 	my $control_edit_ratio_out = ($control_edit_ratio != 0) ? sprintf( "%.4f", $control_edit_ratio) : 0  ;
-
-	# my $control_edit_ratio_out = sprintf( "%.4f", $control_edit_ratio) unless $control_edit_ratio == 0 ;
 
 	my $control_edit_conf;
 	my $edit_ratio;
@@ -773,6 +757,7 @@ sub find_sites {
 	return @outline;
 }
 
+## helper function
 sub max {
 	my $n1 = shift;
 	my $n2 = shift;
@@ -800,6 +785,7 @@ sub log10 {
     return log($n) / log(10); 
 } 
 
+## check that all files have the same types of chrmosomes in first column eg.: chr1 vs 1
 sub check_chr{
 	my ($file, $index) = @_;
 	my $fh;
@@ -821,6 +807,7 @@ sub check_chr{
 	return $stem;
 }
 
+## print a bed6 file, used if bed6 is asked as output
 sub print_bed(){
 	my $file = shift @_;
 

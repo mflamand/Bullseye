@@ -1,8 +1,10 @@
 #!/usr/bin/env perl
 
  ### Author : Mathieu Flamand - Duke University
- ### version : 1.22 
- ### date of last modification : 2021-12-6
+ ### version : 1.3.0 
+ ### date of last modification : 2022-3-3
+
+ ### This program parse BAM files to output a tabix compressed, tab separated file containing the number of each nucleotide at each position in the genome
 
 use strict;
 use warnings;
@@ -13,11 +15,13 @@ use Carp;
 use MCE::Loop;
 use File::Path;
 use Array::IntSpan; 
+use List::Util qw(min);
 
 my ($file, $verbose, $outfile, $max_barcode,$read_thresh, $barcode_filter, $remove_duplicate,$remove_MM, $cell_ID_flag,$bc_pattern,$help);
 my $mode = "bulk";
 my $min_cov = 1;
 my $time_out = 7200;
+# if you are not running with SLURM, CPU and available memory can be set with the --cpu #core and --mem 4096 (in Megabytes)
 my $memory = $ENV{'SLURM_MEM_PER_NODE'} // 8192; 
 my $ncpu= $ENV{'SLURM_CPUS_PER_TASK'} // 1;
 
@@ -43,12 +47,8 @@ GetOptions ("i|input:s"=>\$file,
 
 my $usage = "$0 -i input.bam (--cpu 1 -o output.matrix -b barcode.txt -min 1 -nb 1000 -rt 50000 --verbose)";
 
-################################################
-### Check if all options are correctely used ###
-################################################
-
+### Check if all options are correctely set before running ###
 if ( $help ) { error_out(); } 
-
 unless (-e $file and $file =~/\.bam$/){say "Error, could not find input file"; error_out();}
 ### Make sure index exists and read file to get list of chromosomes in bam ###
 unless (-e "$file.bai"){
@@ -92,12 +92,11 @@ while(<$index>){
 	chomp;
 	next if $_ =~ /^\*/; # ignore unmapped reads
 	my ($chr_id, $chr_length, $mapped_reads) = (split("\t", $_))[0,1,2];
-	$chr_list->{$chr_id}=$chr_length unless $mapped_reads < 1; # only adds if it contains reads
+	$chr_list->{$chr_id}=$chr_length unless $mapped_reads < 1;
 }
 close($index);
 my @chromosomes= sort keys %{$chr_list};
 
-# define output file
 my $fout;
 unless($cell_ID_flag){
     if(not $outfile){$fout =  \*STDOUT;}
@@ -111,6 +110,7 @@ if ($mode eq "cell_ID_flag"){
 	exit(0);
 }
 
+## optionally, we can provide a bed file to exclude regions (such as rRNA) to speed up processing
 my $hr_exclude={};
 if ($exclude){
     open(my $bed_in, "<", $exclude) or die "cannot open $exclude for reading";
@@ -125,7 +125,9 @@ if ($exclude){
     }
 }
 
-# inititalize MCE for faster processing.
+## Processing is done using multiple workers with MCE, each working on an individual chromosome
+## we initialize MCE here once.
+
 MCE::Loop->init(chunk_size => 1,max_workers => $ncpu,loop_timeout => $time_out,
     on_post_exit => sub {
     my ($mce, $e) = @_;
@@ -135,6 +137,10 @@ MCE::Loop->init(chunk_size => 1,max_workers => $ncpu,loop_timeout => $time_out,
         MCE->abort();}
     $mce->restart_worker;},
 );
+
+### Processing will be forked depending on the selected mode: 
+## 1) SingleCell, for processing of single cell data, using the barcode provided in the sam tags
+## 2) Bulk, for normal DART-seq processing or if each cells are to be processed individually and we do not wich to keep track of barcode.
 
 if($mode eq "SingleCell"){
 	my %barcode_hash;
@@ -163,6 +169,8 @@ if($mode eq "SingleCell"){
         LINE:while (my $line = <$fin>){
             chomp;
             next if $line =~ /^\@/;
+            next unless $line =~ /\s${bc_pattern}([A-Z0-9]+)(-\d)?/i;
+            my $barcode = $1;
             my($flag,$start,$matchinfo,$seq) = (split(/\t/,$line))[1,3,5,9];
             ### check for PCR/optical duplicates and remove if needed ###
             if ($remove_duplicate or $remove_MM){
@@ -177,7 +185,7 @@ if($mode eq "SingleCell"){
             }
 
 
-            if ($counter == 10000){
+            if ($counter == 50000){
                 foreach my $barcode (keys %{$matrix}){
                     foreach my $pos (sort { $a <=> $b } keys %{$matrix->{$barcode}}){
                         if ($pos < $start){
@@ -191,8 +199,7 @@ if($mode eq "SingleCell"){
                 }
                 $counter = 0; #reset counter
             }
-            
-            #Parse Cigar String to remove soft clips, ins and dels.
+      
             ($matchinfo, $seq) = parse_cigar($matchinfo, $seq,$line);
 
             my @matches= $matchinfo =~ /(\d+M)/g;
@@ -216,8 +223,8 @@ if($mode eq "SingleCell"){
                     if ($exclude){
                         next if defined  $hr_exclude->{$chr}->lookup($bp) ;
                     }
-                    $matrix->{$bp}->{$base}++;
-                    foreach my $b ("A","T","C","G","N"){$matrix->{$bp}->{$b}+= 0;} # make sure each entry is non empty
+                    $matrix->{$barcode}->{$bp}->{$base}++;
+                    foreach my $b ("A","T","C","G","N"){$matrix->{$barcode}->{$bp}->{$b}+= 0;} 
                 }
                 $offset += $#sequence + 1;
             }
@@ -311,11 +318,10 @@ if($mode eq "SingleCell"){
         }
         MCE->exit(1, "$chr");
     }\@chromosomes;# ($matchinfo, $seq) = parse_cigar($matchinfo, $seq);
-} # end of bulk
+} 
 
-####################
+
 ### File sorting ###
-####################
 
 my $outdir = dirname($outfile); # temp files will be the output folder if they are needed
 my $sort_memory = int($memory*0.8); # use 80% of available memory for sorting
@@ -359,6 +365,7 @@ EOF
 }
 
 
+## This subroutines parses the cigar string and changes the associated sequence in each read.
 sub parse_cigar{
     my $matchinfo = shift @_;
     my $seq = shift @_;
@@ -366,26 +373,24 @@ sub parse_cigar{
 
     my @datapts = split('',$seq); # split sequence in each nucleotide
 
-
-    if($matchinfo =~ /^(\d+)S(.+?)(\d+)S$/){   ### if cigar begins and ends with soft clipped, remove softclip 
+    if($matchinfo =~ /^(\d+)S(.+?)(\d+)S$/){
         $matchinfo = $2;
         splice(@datapts, 0, $1); 
-        splice(@datapts, -$3);# remove the number of soft clipped nucleotide
-    }
+        splice(@datapts, -$3);
 
-    if($matchinfo =~ /(.+[M|N|I|D])(\d+)S$/) {  ### if cigar ends with soft clipped, remove it 
+    if($matchinfo =~ /(.+[M|N|I|D])(\d+)S$/) {  
         $matchinfo = $1;
         splice(@datapts,-$2); 
     }
 
-    if($matchinfo =~ /^(\d+)S(.+[M|N|I|D])$/) { ### if cigar begins with soft clipped, remove the clipped portion  
+    if($matchinfo =~ /^(\d+)S(.+[M|N|I|D])$/) { 
         $matchinfo = $2;
-        splice(@datapts, 0, $1);  # remove the number of soft clipped nucleotide
+        splice(@datapts, 0, $1);
     }
     $matchinfo=join_M($matchinfo);
 
     while ($matchinfo =~ /I/) {
-        if($matchinfo =~ /(^.+?)(\d+)I(.+[M|N|I|D])$/) {  ### if cigar begins with soft clipped, remove the clipped portion  
+        if($matchinfo =~ /(^.+?)(\d+)I(.+[M|N|I|D])$/) {  
             my $cigar_start = $1;
             my $in_size = $2;
             my $cigar_end = $3;
@@ -426,6 +431,7 @@ sub parse_cigar{
  
 }
 
+# This sub rebuild the cigar string when multiple contiguous matching regions are present 
 sub join_M {
     my $cigar = shift @_;
 
