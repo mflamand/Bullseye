@@ -28,9 +28,9 @@ Perl > 5.26 Samtools Bedtools Tabix Perl modules MCE, Math::CDF and Bio::DB::Fas
 The easiest way to get everything up and running without root access is through conda.
 create the conda environment with the provided yml file and activate the environment
 
-conda env create -f bullseye.yml
+	conda env create -f bullseye.yml
 
-conda activate Bullseye
+	conda activate Bullseye
 
 #### then install Bio::DB::Fasta
 XML::Parser is required for Bio::DB::Fasta, but causes problems with conda/cpanm. I opt to install it manually, providing the expat library path:
