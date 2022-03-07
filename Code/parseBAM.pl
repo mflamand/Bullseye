@@ -1,8 +1,8 @@
 #!/usr/bin/env perl
 
  ### Author : Mathieu Flamand - Duke University
- ### version : 1.3.0 
- ### date of last modification : 2022-3-3
+ ### version : 1.3.1 
+ ### date of last modification : 2022-3-7
 
  ### This program parse BAM files to output a tabix compressed, tab separated file containing the number of each nucleotide at each position in the genome
 
@@ -377,7 +377,8 @@ sub parse_cigar{
         $matchinfo = $2;
         splice(@datapts, 0, $1); 
         splice(@datapts, -$3);
-
+    }
+    
     if($matchinfo =~ /(.+[M|N|I|D])(\d+)S$/) {  
         $matchinfo = $1;
         splice(@datapts,-$2); 
