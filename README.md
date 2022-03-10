@@ -76,12 +76,12 @@ bash script are provided and provide examples on how to run the perl script on a
 
 1. Running parseBAM.pl:
 	This first script will parse the aligned and sorted BAM files to output a tab delimited file with the count of each nucleotides at each position in the genome.
-  	A good starting point for bulk DART-seq processing would be to run it as such, removing PCR duplicate reads, and keeping all positions covered by at least 10 reads:
-  	
-  		perl parseBAM.pl --input file.bam --output output.matrix --cpu 4 --minCoverage 10 --removeDuplicates
-	
+	A good starting point for bulk DART-seq processing would be to run it as such, removing PCR duplicate reads, and keeping all positions covered by at least 10 reads:
+
+		perl parseBAM.pl --input file.bam --output output.matrix --cpu 4 --minCoverage 10 --removeDuplicates
+
 	Addional options are available and can be listed with the --help option	  
-	
+
 	Single cell dataset data can be processed using the same script using the --mode SingleCell option and indicating the type of barcode used with the -Cell_ID_pattern option. For example: 
 		
 		perl parseBAM.pl --mode SingleCell --Cell_ID_pattern 10X --input file.bam --output output.matrix --cpu 4
@@ -89,20 +89,36 @@ bash script are provided and provide examples on how to run the perl script on a
 	Additionally, we provide a bash script (Make_matrix.sh) in the example data folder. This script provides a usage example of parseBAM.pl under the Slurm workload manager
   	
 2. Running Find_edit_site.pl:
-  This script compares editing in a matrix file from parseBAM.pl to a control matrix (Mettl3 KO or YTHmut-APOBEC1) or to the genomic sequence to identify m6A sites.
-  Only the sites found in transcripts defined in a refFlat annotation file will be identified. RefFlat files can be downloaded from UCSC. an example file is provided in the example directory.
   
-		perl Find_edit_site.pl --annotationFile $annotation_file \
-		--EditedMatrix dart.matrix.gz \
-		--controlMatrix control.matrix.gz \
-		--minEdit 5 \ #minimal editing rates
-		--maxEdit 90 \ #maximal editing rates
-		--editFoldThreshold 1.5 \ # minimal editing ration over control sample
-		--MinEditSites 3 \ #minimal number of mutations for detection of site
-		--cpu 4 \
-		--outfile output.bed \
-		--fallback genome.fasta \ # fasta file of genome in case there was no coverage for a given position in the control file
-		--verbose
+	This script compares editing in a matrix file from parseBAM.pl to a control matrix (Mettl3 KO or YTHmut-APOBEC1) or to the genomic sequence to identify m6A sites.
+
+	Editing site will be identified only in regions specified in an annotation file. For this a GenePrediction file (refFlat) is provided. This allows annotation of each sites to a feature of the transcriptome. Optionally, the flags "--intron" and "--extUTR size" can be added to identify sites in the introns of transcripts and in an extended region after the annotated 3'UTRs (protein coding genes only). 
+
+	A refFlat files can be downloaded from UCSC table browser, in the refFlat table of the NCBI RefSeq track. An example refFlat file is is provided in the example directory. 
+	For Gencode datasets, the All GENCODE Vxx tracks can be used, with the ouput format as : "selected fields from primary and related table", selecting the following fields: 
+
+	<img src="https://user-images.githubusercontent.com/47067352/157693870-6be01410-e447-46db-b5d6-6c9bb59803ef.png" width="250">
+
+	If the gene name is desired instead of the ensembl transcript ID is wanted for annotation, the name2 field can also be selected to latter replace the first column by running: 
+
+			 perl -lane 'if($.==1){pop(@F)}else{$F[0]=pop(@F)}; print join("\t",@F);' hgTables.txt > hgTableNames2.txt
+
+	A custom GTF file can be converted to a refFlat using the gtfToGenePred utility from the UCSC utilities (KentUtils).
+
+	Alternatively, 6 column bed file can be provided with the "--KnownSites" option, replacing the "--annotationFile". Using this option will not allow the use of "--intron" or "--extUTR" options and the position of each site in the target RNA (5'UTR;CDS;3'UTR) will not be found in the output file.
+
+
+			perl Find_edit_site.pl --annotationFile $annotation_file \
+			--EditedMatrix dart.matrix.gz \
+			--controlMatrix control.matrix.gz \
+			--minEdit 5 \ #minimal editing rates
+			--maxEdit 90 \ #maximal editing rates
+			--editFoldThreshold 1.5 \ # minimal editing ration over control sample
+			--MinEditSites 3 \ #minimal number of mutations for detection of site
+			--cpu 4 \
+			--outfile output.bed \
+			--fallback genome.fasta \ # fasta file of genome in case there was no coverage for a given position in the control file
+			--verbose
 	
 	As before, additional options are available and can be listed with the --help option.
 
