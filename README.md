@@ -97,13 +97,16 @@ bash script are provided and provide examples on how to run the perl script on a
 	A refFlat files can be downloaded from UCSC table browser, in the refFlat table of the NCBI RefSeq track. An example refFlat file is is provided in the example directory. 
 	For Gencode datasets, the All GENCODE Vxx tracks can be used, with the ouput format as : "selected fields from primary and related table", selecting the following fields: 
 
-	<img src="https://user-images.githubusercontent.com/47067352/157693870-6be01410-e447-46db-b5d6-6c9bb59803ef.png" width="250">
+	<img src="https://user-images.githubusercontent.com/47067352/160654777-e5226077-fcce-4c70-a7a8-d77dda225583.png" width="250">
 
-	If the gene name is desired instead of the ensembl transcript ID is wanted for annotation, the name2 field can also be selected to latter replace the first column by running: 
+	You will then need to move the name of each gene to the first column to generate the refFlat.
 
-			 perl -lane 'if($.==1){pop(@F)}else{$F[0]=pop(@F)}; print join("\t",@F);' hgTables.txt > hgTableNames2.txt
+			 perl -lanE 'if ($_=~ /^\#/){say $_;next;}else{$name=pop(@F)}; print join("\t",$name,@F);' hgTables.txt > hgTables.refFlat
 
-	A custom GTF file can be converted to a refFlat using the gtfToGenePred utility from the UCSC utilities (KentUtils).
+	A custom GTF file can be converted to a refFlat using the gtfToGenePred utility from the UCSC utilities (KentUtils), and modifying the output: 
+	
+		gtfToGenePred -genePredExt annotation.gtf output.genepredext 
+		perl -lanE 'if ($_=~ /^\#/){say $_}else{say join("\t",$F[11] ,@F[0..9])}' output.genepredext > output.refFlat
 
 	Alternatively, 6 column bed file can be provided with the "--KnownSites" option, replacing the "--annotationFile". Using this option will not allow the use of "--intron" or "--extUTR" options and the position of each site in the target RNA (5'UTR;CDS;3'UTR) will not be found in the output file.
 
