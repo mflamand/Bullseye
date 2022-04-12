@@ -1,8 +1,8 @@
  #!/usr/bin/env perl
  
  ### Author : Mathieu Flamand - Duke University
- ### version : 1.3.2
- ### date of last modification : 2022-3-3
+ ### version : 1.3.3
+ ### date of last modification : 2022-4-12
  
 ### This programs identifies editing sites by comparing a DART/TRYBE matrix to a control matrix file or to the genomic sequence. 
 ### For strand information, a refFlat file is provided, sites found within annotated features will be  idenitified according to provided settings.
@@ -180,7 +180,6 @@ else{ ## if not output file given
 	$out_fh = \*STDOUT;
 }
 
-
 ### Start processing ###
 ### Here we are reading an optional bed files which contains known SNPs or regions to be excluded
 ### several file can be provided, all regions will be added to the same hash table, strand is not considered for filtering these regions
@@ -201,7 +200,6 @@ if (@bedfiles){
 		}
 	}
 }
-
 
 ## open annotation filehandle and store in %genes
 ## there a 2 options: 
@@ -430,13 +428,16 @@ my @filtered_sites = mce_loop
 				my $ID = $genes->{$type_order}->{$chr}->{$transcript}->{$start}->{ID}; ## gene name
 				my $strand = $genes->{$type_order}->{$chr}->{$transcript}->{$start}->{STRAND};
 				my $type = $genes->{$type_order}->{$chr}->{$transcript}->{$start}->{TYPE};
-
 				$ID = "$ID|$type";
 
-				$pos_array_for->set_range($start,$end,$ID) if $strand eq "+";
-				
-				$pos_array_rev->set_range($start,$end,$ID) if $strand eq "-";
-				
+				if ($start <= $end){
+					$pos_array_for->set_range($start,$end,$ID) if $strand eq "+";
+					$pos_array_rev->set_range($start,$end,$ID) if $strand eq "-";
+				}
+				else{
+					$pos_array_for->set_range($end,$start,$ID) if $strand eq "+";
+					$pos_array_rev->set_range($end,$start,$ID) if $strand eq "-";
+				}
 			} 
 		}
 	}
