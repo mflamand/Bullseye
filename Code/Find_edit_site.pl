@@ -617,7 +617,7 @@ complete list of options:
 	--score			: score and filter reads based on probability of edit based on beta distribution curve. Sites with 10 fold higher probability in DART/control will be kept (f)
 	--filterBed		: bed file of sites to exclude from analysis (SNP or APOBEC background). Multiple files can be provided by using --filterBed multiple times
 	--printFilteredSites	: Additionally output fitered sites in a outfile.excluded_sites.bed
-	--KnownSites	: Instead of a refFlat annotation file, a bed file defining regions to be looked at can be defines. For now this needs to be a bed6 file.
+	--KnownSites	: Instead of a refFlat annotation file, a bed file containing regions to probed can be defined. For now this needs to be a bed6 file.
 	
 USAGE::BLOCK
 

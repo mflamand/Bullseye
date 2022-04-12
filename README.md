@@ -108,6 +108,10 @@ bash script are provided and provide examples on how to run the perl script on a
 		gtfToGenePred -genePredExt annotation.gtf output.genepredext 
 		perl -lanE 'if ($_=~ /^\#/){say $_}else{say join("\t",$F[11] ,@F[0..9])}' output.genepredext > output.refFlat
 
+	Or by using the provided gtf2genepresd.pl script:
+
+			perl gtf2genepred.pl --gtf annotation.gtf.gz --out annotation.refFlat
+
 	Alternatively, 6 column bed file can be provided with the "--KnownSites" option, replacing the "--annotationFile". Using this option will not allow the use of "--intron" or "--extUTR" options and the position of each site in the target RNA (5'UTR;CDS;3'UTR) will not be found in the output file.
 
 
