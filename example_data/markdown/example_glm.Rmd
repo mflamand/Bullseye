@@ -1,0 +1,155 @@
+---
+title: "Bullseye analysis"
+Author: Mathieu Flamand
+Date: 2022-5-21
+---
+
+Load required libraries
+
+```{r}
+library(tidyverse)
+library(aod)
+library(IHW)
+```
+load custom functions for glm fitting
+
+```{r}
+source("functions.R")
+```
+
+Read list of called sites in bullseye
+
+```{r}
+m6A_sites<-read_delim("m6a_sites.bed", delim = "\t", col_names = c("chr","start","end","name","score","strand","control", "control_cov", "x","cov","type","n_rep")) %>%
+  dplyr::select(-x) %>% 
+  separate(name, into=c("external_gene_name","biotype","type1","nmut","fold"), sep = "([|])") %>%
+  separate(nmut, into = c("lab","nmut"),sep="([=])") %>% dplyr::select(-type1, lab) %>%
+  mutate(fold=as.numeric(fold)) 
+
+```
+
+Read coverage and mutation matrices with data for every samples
+
+```{r}
+
+m6a_cov<-read.delim("samples.coverage.txt") %>% dplyr::mutate(name=paste(X.chr,start,end,strand,sep="_")) %>%  
+  dplyr::select(!1:5)%>% 
+  tibble::column_to_rownames(., 'name') 
+
+m6a_mut<-read.delim("samples.mut.txt")%>% 
+  dplyr::mutate(name=paste(X.chr,start,end,strand,sep="_")) %>% 
+  dplyr::select(!1:5)%>% 
+  tibble::column_to_rownames(., 'name') 
+```
+
+Generate a dataframe containing sample information
+
+This is similar to DESeq2 coldata. We want to have one row per sample, and a column indicating the conditions by which the data will be modeled in the GLM.
+
+```{r}
+
+samples <- names(m6a_cov) # get sample names from matrix
+
+genotype = factor(c(rep("KO", 8), rep("WT", 8)),levels=c("KO","WT")) # First factor, genotype
+
+compartment = c( rep(c("Soma","Neurites"), 4)) # second factor 
+repn = c(rep(c(rep("rep1",2),rep("rep2",2),rep("rep3",2),rep("rep4",2)))) # replicate number
+
+#make colData
+colData<- data.frame(row.names = samples, genotype = genotype, compartment = compartment ,repn=repn ) 
+
+#generate new name for each sample
+colData<-colData %>% mutate(name=paste(genotype,compartment,repn,sep="_"))
+
+# assign new name each sample.
+# for the function to work, each sample needs to contain the factor level in its name
+row.names(colData)<- colData$name
+
+names(m6a_cov)<-colData$name
+
+names(m6a_mut)<-colData$name
+
+```
+
+For all sites, fit data in GLM and extract log2foldChanges, significance between conditions
+
+for binomial GLM, use link='bin', for quasibinomial: link='quasibinomial', for beta binomial: link='betabin'
+
+
+```{r}
+
+
+results_qbin <-Bullseye(data_cov=m6a_cov, #coverage matrix
+                        data_mut=m6a_mut, #mutation matrix
+                        colData = colData,
+                        min.cov=10, #sites with coverage below this threshold will be ignored 
+                        min = 0.025, # minimal editing rate to call a site, this will be used to calculate the average editing in called sites. (2 averages are reported, in all samples and in called sites)
+                        design = ~genotype, # design for the GLM, 1 factor design only
+                        link='quasibinomial')
+
+
+# other options:
+#
+# filter.col = column of colData
+# filter.with = value of colData 
+# when using these options, only the samples with the specified values in the specified column will be analyzed. 
+#
+# dataset = m6A_sites # list of m6A sites
+#
+# if the matrix were generated on an extended list of sites and we want to do the analysis on a restricted set of sites, we can indicate use this option to only analyze these sites.
+#
+#
+#
+
+```
+
+The resulting tables contains the following 
+
+For each factor in the design:
+ - sum of coverage in all samples (factor_sum_cov)
+ - sum of all mutation in all samples (factor_mut)
+ - average editing in all samples (factor)
+ - number of samples with more coverage than selected with min.cov option (factor_min_cov)
+ - number of sample where site is "called", meaning more than indicated with min option (factor_called_sites)
+ - average editing in "called" sites (factor_average_called)
+ - Log2FoldChange over reference level (factor_log2FoldChange). This is strictly the average editing in all samples / average editing in reference level
+ - LFC (also Log2FoldChange) (factor_LFC) this is log2 fold change is calculated from the GLM fitted data. This is more conservative and what I usually use
+ - results of Wald test for significance (factor_pvalue)
+ - average editing across all samples (baseEdit)
+ 
+
+We can then adjust pvalues for multiple comparisons
+
+```{r}
+
+#Using FDR 
+
+results_qbin<- results_qbin %>%
+  mutate(padj=p.adjust(WT_pvalue)) %>% 
+  ungroup() %>% 
+  mutate(padj=replace_na(padj,1))
+
+# or with IHW using average editing across all samples to weight adjustement. This may not be appropriate when comparing DART to DARTmut or WT to KO samples. if other conditions are compared it may makes more sense
+
+
+results_qbin<- results_qbin %>%
+  mutate(padj=ihw(WT_pvalue ~ baseEdit,data=., alpha=0.05)@df$adj_pvalue) %>% 
+  ungroup() %>% 
+  mutate(padj=replace_na(padj,1))
+
+
+```
+
+Filter sites with desired parameters
+
+```{r}
+
+
+filtered_res<-results_qbin %>% filter( WT_LFC>=log2(2), WT_average_called >=0.1, padj< 0.1) 
+
+filtered_sites<-m6A_sites %>% filter(site %in% filtered_res$site) %>% dplyr::select(chr,start,end,external_gene_name,score,strand)
+
+write_delim(temp1, "filtered_m6A_sites.bed", delim="\t")
+
+```
+
