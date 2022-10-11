@@ -53,6 +53,10 @@ For the use of Bullseye in the detection of m6A in single cells, see:
 
 1. Tegowski, M. , Flamand, M.N., Meyer, K.M. scDART-seq reveals distinct m6 A signatures and mRNA methylation heterogeneity in single cells. Mol Cell 82, 868–878, February 17, 2022. https://doi.org/10.1016/j.molcel.2021.12.038 
 
+For use in Bulk dataset and quantification of editing, see: 
+
+2. Flamand, M.N. and Meyer K.D. m6A and YTHDF proteins contribute to the localization of select neuronal mRNAs. Nucleic Acids Research, Volume 50, Issue 8, 6 May 2022, Pages 4464–4483, https://doi.org/10.1093/nar/gkac251
+
 For information of original HyperTRIBE pipeline, see : 
 
 ## HyperTRIBE
