@@ -82,6 +82,8 @@ bash script are provided and provide examples on how to run the perl script on a
 
 	Addional options are available and can be listed with the --help option	  
 
+	A new option is now available: `--stranded`, which allows processing of stranded librairies. This will keep track of strandeness for librairies prepared with dUTP method (ISR). Using this option will ensure the proper detection of sites when there are overlapping transcripts.
+
 	Single cell dataset data can be processed using the same script using the --mode SingleCell option and indicating the type of barcode used with the -Cell_ID_pattern option. For example: 
 		
 		perl parseBAM.pl --mode SingleCell --Cell_ID_pattern 10X --input file.bam --output output.matrix --cpu 4

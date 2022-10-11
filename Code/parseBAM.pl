@@ -1,10 +1,10 @@
 #!/usr/bin/env perl
 
  ### Author : Mathieu Flamand - Duke University
- ### version : 1.3.1 
- ### date of last modification : 2022-3-7
+ ### version : 1.4.1 
+ ### date of last modification : 2022-8-22
 
- ### This program parse BAM files to output a tabix compressed, tab separated file containing the number of each nucleotide at each position in the genome
+ ### This scripts parse BAM files to output a tabix compressed, tab separated file containing the number of each nucleotide at each position in the genome
 
 use strict;
 use warnings;
@@ -17,7 +17,7 @@ use File::Path;
 use Array::IntSpan; 
 use List::Util qw(min);
 
-my ($file, $verbose, $outfile, $max_barcode,$read_thresh, $barcode_filter, $remove_duplicate,$remove_MM, $cell_ID_flag,$bc_pattern,$help);
+my ($file, $verbose, $outfile, $max_barcode,$read_thresh, $barcode_filter, $remove_duplicate,$remove_MM, $cell_ID_flag,$bc_pattern,$stranded,$help);
 my $mode = "bulk";
 my $min_cov = 1;
 my $time_out = 7200;
@@ -43,6 +43,7 @@ GetOptions ("i|input:s"=>\$file,
 			"h|help"=>\$help,
 			"mem=i"=>\$memory,
             "ribosome:s"=>\$exclude,
+            "stranded"=>\$stranded,
 		) or die "Error in command line arguments, please use --help for information on usage\n";;
 
 my $usage = "$0 -i input.bam (--cpu 1 -o output.matrix -b barcode.txt -min 1 -nb 1000 -rt 50000 --verbose)";
@@ -148,7 +149,7 @@ if($mode eq "SingleCell"){
 		open(my $bc_fh, "<", $barcode_filter) or die "can't open $barcode_filter for reading: $!\n";
 		my $line_counter=0;
 		while(<$bc_fh>){
-			(split, "\t")[0] =~ /:?([A-Z0-9]+)(\-\d)?/i;
+			(split, "\t")[0] =~ /:?([A-Z0-9\-\_]+)?/i;
 			my $barcode = $1;
 			last if $read_thresh and (split, "\t")[1] < $read_thresh;
 			$barcode_hash{$barcode} = 1;
@@ -167,15 +168,18 @@ if($mode eq "SingleCell"){
         open( my $fin, "samtools view $file $chr|") or croak "Can't read bam file $file for chr $chr"; 
 
         LINE:while (my $line = <$fin>){
-            chomp;
+            chomp $line;
             next if $line =~ /^\@/;
-            next unless $line =~ /\s${bc_pattern}([A-Z0-9]+)(-\d)?/i;
+            next unless $line =~ /\s${bc_pattern}:?([A-Z0-9\-\_]+)?/i;
             my $barcode = $1;
+            next LINE if ($barcode_filter and not defined $barcode_hash{$barcode});
             my($flag,$start,$matchinfo,$seq) = (split(/\t/,$line))[1,3,5,9];
+            my $strand = "NS";
+            $flag = sprintf ("%012b", $flag);
+            my ($dup,$secondary_alignement,$first, $second, $m_reverse, $reverse,$paired) = (split (//, $flag))[1,3,4,5,6,7,11];
+            next LINE if $paired eq 0;
             ### check for PCR/optical duplicates and remove if needed ###
             if ($remove_duplicate or $remove_MM){
-                $flag = sprintf ("%012b", $flag);
-                my ($dup,$secondary_alignement) = (split (//, $flag))[1,3];
                 if ($remove_duplicate){
                    next LINE if $dup eq 1;
                 }
@@ -184,24 +188,28 @@ if($mode eq "SingleCell"){
                 }
             }
 
+            if($stranded){
+               $strand = get_strand($first,$second,$reverse,$m_reverse);
+            }
 
             if ($counter == 50000){
                 foreach my $barcode (keys %{$matrix}){
-                    foreach my $pos (sort { $a <=> $b } keys %{$matrix->{$barcode}}){
-                        if ($pos < $start){
-                            my @outline = return_line($pos, $matrix->{$barcode}, $chr);
-                            push @outline, $barcode;
-                            my $out_line = join("\t", @outline);
-                            MCE->say($fout, $out_line ) if ($outline[7] >= $min_cov);
-                            delete($matrix->{$barcode}->{$pos});
+                    foreach my $strds ("+","-","NS"){
+                        foreach my $pos (sort { $a <=> $b } keys %{$matrix->{$barcode}->{$strds}}){
+                            if ($pos < $start){
+                                my @outline = return_line($pos, $matrix->{$barcode}, $chr,$strds);
+                                push @outline, $barcode;
+                                my $out_line = join("\t", @outline);
+                                MCE->say($fout, $out_line ) if ($outline[7] >= $min_cov);
+                                delete($matrix->{$barcode}->{$strds}->{$pos});
+                            }
                         }
                     }
                 }
                 $counter = 0; #reset counter
             }
       
-            ($matchinfo, $seq) = parse_cigar($matchinfo, $seq,$line);
-
+            ($matchinfo, $seq) = parse_cigar($matchinfo, $seq);
             my @matches= $matchinfo =~ /(\d+M)/g;
             my @skip = $matchinfo =~ /(\d+N)/g;
             my @datapts = split('',$seq); # split sequence in each nucleotide
@@ -224,20 +232,22 @@ if($mode eq "SingleCell"){
                         next if defined  $hr_exclude->{$chr}->lookup($bp) ;
                     }
                     $matrix->{$barcode}->{$bp}->{$base}++;
-                    foreach my $b ("A","T","C","G","N"){$matrix->{$barcode}->{$bp}->{$b}+= 0;} 
+                    foreach my $b ("A","T","C","G","N"){$matrix->{$barcode}->{$strand}->{$bp}->{$b}+= 0;} 
                 }
                 $offset += $#sequence + 1;
             }
             $counter++;
         }   
-        # deal with any leftovers
+        # deal with any leftovers  
         foreach my $barcode (keys %{$matrix}){
-            foreach my $pos (sort { $a <=> $b } keys %{$matrix->{$barcode}}){
-                my @outline = return_line($pos, $matrix->{$barcode}, $chr);
-                push @outline, $barcode;
-                my $out_line = join("\t", @outline);
-                MCE->say($fout, $out_line ) if ($outline[7] >= $min_cov);
-                delete($matrix->{$barcode}->{$pos});
+            foreach my $strds ("+","-","NS"){
+                foreach my $pos (sort { $a <=> $b } keys %{$matrix->{$barcode}->{$strds}}){
+                    my @outline = return_line($pos, $matrix->{$barcode}, $chr,$strds);
+                    push @outline, $barcode;
+                    my $out_line = join("\t", @outline);
+                    MCE->say($fout, $out_line ) if ($outline[7] >= $min_cov);
+                    delete($matrix->{$barcode}->{$strds}->{$pos});
+                }
             }
         }
         MCE->exit(1, "$chr"); # exit when done with chromosome this will report in STDERR if verbose is used
@@ -256,13 +266,16 @@ if($mode eq "SingleCell"){
 
         LINE:while (my $line = <$fin>)
         {
-            chomp;
+            chomp $line;
             next if $line =~ /^\@/;
+            
             my($flag,$start,$matchinfo,$seq) = (split(/\t/,$line))[1,3,5,9];
+            my $strand = "NS";
+            $flag = sprintf ("%012b", $flag);
+            my ($dup,$secondary_alignement,$first, $second, $m_reverse, $reverse,$paired) = (split (//, $flag))[1,3,4,5,6,7,11];
+            next LINE if $paired eq 0;
         
-           if ($remove_duplicate or $remove_MM){
-                $flag = sprintf ("%012b", $flag);
-                my ($dup,$secondary_alignement) = (split (//, $flag))[1,3];
+            if($remove_duplicate or $remove_MM){
                 if ($remove_duplicate){
                    next LINE if $dup eq 1;
                 }
@@ -270,20 +283,26 @@ if($mode eq "SingleCell"){
                     next LINE if $secondary_alignement eq 1;
                 }
             }
-        
-            if ($counter == 50000){
-               foreach my $pos (sort { $a <=> $b } keys %{$matrix}){
-                        if ($pos < $start){
-                            my @outline = return_line($pos, $matrix, $chr);
-                            my $out_line = join("\t", @outline);
-                            MCE->say($fout, $out_line ) if ($outline[7] >= $min_cov);
-                            delete($matrix->{$pos});
-                        }
+
+            if($stranded){
+               $strand = get_strand($first,$second,$reverse,$m_reverse);
+            }
+
+            if ($counter == 100000){
+                foreach my $strds ("+","-","NS"){
+                    foreach my $pos (sort { $a <=> $b } keys %{$matrix->{$strds}}){
+                            if ($pos < $start){
+                                my @outline = return_line($pos, $matrix, $chr, $strds);
+                                my $out_line = join("\t", @outline);
+                                MCE->say($fout, $out_line ) if ($outline[7] >= $min_cov);
+                                delete($matrix->{$strds}->{$pos});
+                            }
                     }
+                }
                 $counter = 0; #reset counter
             }
 
-            ($matchinfo, $seq) = parse_cigar($matchinfo, $seq,$line);
+            ($matchinfo, $seq) = parse_cigar($matchinfo, $seq);
             my @matches= $matchinfo =~ /(\d+M)/g;
             my @skip = $matchinfo =~ /(\d+N)/g;
             my @datapts = split('',$seq); # split sequence in each nucleotide
@@ -303,18 +322,19 @@ if($mode eq "SingleCell"){
                     if ($exclude){
                         next if defined  $hr_exclude->{$chr}->lookup($bp) ;
                     }
-                    $matrix->{$bp}->{$base}++;
-                    foreach my $b ("A","T","C","G","N"){$matrix->{$bp}->{$b} += 0;}
+                    $matrix->{$strand}->{$bp}->{$base}++;
+                    foreach my $b ("A","T","C","G","N"){$matrix->{$strand}->{$bp}->{$b} += 0;}
                     }
                 $offset += $#sequence+1;
             }
             $counter++;
         }
-    
-        foreach my $pos (sort { $a <=> $b } keys %{$matrix}){
-            my @outline = return_line($pos, $matrix, $chr);
-            my $out_line = join("\t", @outline);
-            MCE->say($fout, $out_line ) if ($outline[7] >= $min_cov);
+        foreach my $strds ("+","-","NS"){
+            foreach my $pos (sort { $a <=> $b } keys %{$matrix->{$strds}}){
+                my @outline = return_line($pos, $matrix, $chr,$strds);
+                my $out_line = join("\t", @outline);
+                MCE->say($fout, $out_line ) if ($outline[7] >= $min_cov);
+            }
         }
         MCE->exit(1, "$chr");
     }\@chromosomes;# ($matchinfo, $seq) = parse_cigar($matchinfo, $seq);
@@ -326,7 +346,11 @@ if($mode eq "SingleCell"){
 my $outdir = dirname($outfile); # temp files will be the output folder if they are needed
 my $sort_memory = int($memory*0.8); # use 80% of available memory for sorting
 # fast in place sort with C locale
-system("LC_ALL=C sort -k1,1 -k2,2n --parallel=$ncpu -T $outdir -S${sort_memory}M -o $outfile $outfile") == 0 or die "Failed to sort file $file:$!";
+my $cmd = "LC_ALL=C sort -k1,1 -k2,2n ";
+$cmd .= "-k9,9 " if $stranded;
+$cmd .= "--parallel=$ncpu -T $outdir -S${sort_memory}M -o $outfile $outfile";
+say $cmd if $verbose;
+system($cmd) == 0 or die "Failed to sort file $file:$!";
 # compress with bgzip 
 system("bgzip -f -@ $ncpu $outfile") == 0 or die "error compressing final file with bgzip";
 # index with tabi x
@@ -369,10 +393,12 @@ EOF
 sub parse_cigar{
     my $matchinfo = shift @_;
     my $seq = shift @_;
-    my $line = shift @_;
+    # my $line = shift @_;
 
     my @datapts = split('',$seq); # split sequence in each nucleotide
 
+    $matchinfo =~ s/\d+H$//; #remove any hardclipping sections
+    
     if($matchinfo =~ /^(\d+)S(.+?)(\d+)S$/){
         $matchinfo = $2;
         splice(@datapts, 0, $1); 
@@ -499,14 +525,34 @@ sub return_line{
     my $pos = shift @_;
     my $matrix_ref = shift @_;
     my $chr = shift @_;
+    my $strds = shift @_;
 
-    my $A = $matrix_ref->{$pos}->{"A"};
-    my $T = $matrix_ref->{$pos}->{"T"};
-    my $C = $matrix_ref->{$pos}->{"C"};
-    my $G = $matrix_ref->{$pos}->{"G"};
-    my $N = $matrix_ref->{$pos}->{"N"};
+    my $A = $matrix_ref->{$strds}->{$pos}->{"A"};
+    my $T = $matrix_ref->{$strds}->{$pos}->{"T"};
+    my $C = $matrix_ref->{$strds}->{$pos}->{"C"};
+    my $G = $matrix_ref->{$strds}->{$pos}->{"G"};
+    my $N = $matrix_ref->{$strds}->{$pos}->{"N"};
     my $total = $A + $T + $C + $G + $N;
     my @outline = ($chr,$pos,$A,$T,$C,$G,$N,$total);
-    
+    if ($strds eq "+" or $strds eq "-"){
+        push (@outline,$strds);
+    }
     return @outline; 
+}
+
+sub get_strand{
+    my ($first, $second, $reverse, $m_reverse) = @_;
+    my $strand="NS"; # default
+    if ($first and $reverse){
+        $strand = "-"; # 
+    }elsif($first and $m_reverse){
+        $strand = "+"; # 
+    }elsif($second and $m_reverse){
+        $strand = "-";
+    }elsif($second and $reverse){
+        $strand = "+";
+    }else{
+        $strand = "NA"; # improper pair, discard
+    }
+    return $strand;
 }

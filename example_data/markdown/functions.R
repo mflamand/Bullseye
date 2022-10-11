@@ -1,4 +1,24 @@
 
+# color palette
+
+cbp1 <- c("#999999", "#E69F00", "#56B4E9", "#009E73",
+          "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+
+# theme
+
+library(aod)
+
+theme_mf <- function(){
+  
+  theme(panel.background = element_blank(),
+        panel.grid = element_blank(),
+        axis.line = element_line(color="black",size=0.25),
+        axis.ticks = element_line(color="black",size=0.25),
+        axis.text = element_text(color="black",size=7, margin=margin(0,0,0,0)) 
+  )
+  
+}
+
 # glm helper function
 
 glm_comp_bbn<-function(df, design, lev,comp){
@@ -175,7 +195,7 @@ glm_comp_bn<-function(df, design, lev,comp,link="binomial"){
 
 #function to calculate glm and p value
 
-Bullseye<-function(data_cov,data_mut, colData=NULL, filter.col=NULL, filter.with=NULL, min=0.05, filter.sites=NULL,dataset=NULL,design=NULL, min.cov=10, return.df.only=FALSE, link='betabin'){
+Bullseye<-function(data_cov,data_mut, colData=NULL, filter.col=NULL, filter.with=NULL, min=0.05, filter.sites=NULL,dataset=NULL,design=NULL, min.cov=10, return.df.only=FALSE, link='betabin', numCores=1){
 
   #filter.sites : needs to be "all" or "called", if all: will only keep sites with at least min edit in one or the other samples. If "called": will keep samples with at least min in both conditions. 
   if(link != 'betabin' && link != 'bin' && link != 'quasibinomial') stop('Please use link="betabin", link="bin" or link="quasibinomial')
@@ -246,13 +266,13 @@ Bullseye<-function(data_cov,data_mut, colData=NULL, filter.col=NULL, filter.with
   n_data<-data_long%>% group_by(site) %>% nest()
   
   if (link =="bin"){
-    results<-lapply(X = n_data$data, FUN = glm_comp_bn,design=formula(paste0("mut/cov",deparse(design))), lev=design_levels,comp=design[[2]])
+    results<-parallel::mclapply(X = n_data$data, FUN = glm_comp_bn,design=formula(paste0("mut/cov",deparse(design))), lev=design_levels,comp=design[[2]], mc.cores = numCores)
   }
   else if (link =="quasibinomial"){
-    results<-lapply(X = n_data$data, FUN = glm_comp_bn,design=formula(paste0("mut/cov",deparse(design))), lev=design_levels,comp=design[[2]],link="quasibinomial")
+    results<-parallel::mclapply(X = n_data$data, FUN = glm_comp_bn,design=formula(paste0("mut/cov",deparse(design))), lev=design_levels,comp=design[[2]],link="quasibinomial", mc.cores = numCores)
   }
   else if (link =="betabin"){
-    results<-lapply(X = n_data$data, FUN = glm_comp_bbn,design=design, lev=design_levels,comp=design[[2]])
+    results<-parallel::lapply(X = n_data$data, FUN = glm_comp_bbn,design=design, lev=design_levels,comp=design[[2]], mc.cores = numCores)
   }
   # return(results)
   results<-do.call(rbind.data.frame, results)

@@ -1,8 +1,8 @@
- #!/usr/bin/env perl
+#!/usr/bin/env perl
  
  ### Author : Mathieu Flamand - Duke University
- ### version : 1.3.3
- ### date of last modification : 2022-4-12
+ ### version : 1.5.0
+ ### date of last modification : 2022-8-16
  
 ### This programs identifies editing sites by comparing a DART/TRYBE matrix to a control matrix file or to the genomic sequence. 
 ### For strand information, a refFlat file is provided, sites found within annotated features will be  idenitified according to provided settings.
@@ -40,6 +40,9 @@ my $WToverKO = 1.5; #1.5 fold over control default
 my $min_edit_site = 2;
 my $Edited_mincovthresh = 10;
 my $Control_mincovthresh = 10;
+my $max_bkg; 
+my $bkg_ratio; 
+my $stranded;
 
 ###set option of program using Getopt::long
 GetOptions ("a|annotationFile:s"=>\$annotationfile,
@@ -67,6 +70,9 @@ GetOptions ("a|annotationFile:s"=>\$annotationfile,
 			"filterBed=s"=>\@bedfiles,
 			"printFilteredSites"=>\$bed_flag,
 			"KnownSites:s"=>\$known_sites,
+			"MaxBckg:s"=>\$max_bkg,
+			"BckgRatio:s"=>\$bkg_ratio,
+			"stranded"=>\$stranded,
 		) or error_out();
 
 
@@ -230,8 +236,8 @@ if($known_sites){
 	close $annotation_handle;
 }
 else{
-open(my $annotation_handle,"<", $annotationfile) or die "Can't open $annotationfile: $!\n";   
-print STDERR "loading annotation file $annotationfile... " if $verbose;
+	open(my $annotation_handle,"<", $annotationfile) or die "Can't open $annotationfile: $!\n";   
+	print STDERR "loading annotation file $annotationfile... " if $verbose;
 
 	foreach my $line (<$annotation_handle>)	{  
 		chomp $line;
@@ -345,11 +351,8 @@ print STDERR "loading annotation file $annotationfile... " if $verbose;
 	close $annotation_handle;
 }
 
-my ($control_stem, $control_file_list);
-my ($dart_stem, $dart_file_list);
-my $index_list = {};
-
 ## When using a control dataset, we verify that the matrix file exist and is indexed. Then we extract the name of all chromosomes.   
+my $index_list = {};
 unless ($genome)
 {
 	if (-f $ControlTableName and $ControlTableName =~ /\.gz$/ and -e "$ControlTableName.tbi"){
@@ -379,8 +382,7 @@ MCE::Loop->init(
 	chunk_size => 1,
 	max_workers => $ncpu, ## use number of specified threads for processing 
 	loop_timeout => 1800, # defaults to 60minutes max per chromosome
-	on_post_exit => sub 
-	{
+	on_post_exit => sub{
 		my ($mce, $e) = @_;
 		say "done with chromosome: $e->{msg}" if $verbose;
 		unless ($e->{status} eq 42){
@@ -449,7 +451,7 @@ my @filtered_sites = mce_loop
 	# read first lines
 	my ($control_line, $control_flag) = read_matrix_line($control_fh, $last_control_line) unless ($genome);
 	my ($dart_line, $dart_flag) = read_matrix_line($dart_fh, $last_dart_line);
-	
+
 	my $chrom_seq;
 	#load chromosome sequence in memory if needed. This will increase memory usage, but should decrease access time?
 	if ($genome or $fallback){
@@ -468,13 +470,11 @@ my @filtered_sites = mce_loop
 			$control ={};
 			$ccoord = $ecoord;
 		}
-
 		# in case fall back option is used. when value is lower in absent in control matrix, fetch genomic coordinate
 		if($ecoord < $ccoord and $fallback and not $dart_flag or $control_flag)	{
 			$control ={};
 			$ccoord = $ecoord;
 		}
-
 		#case when edit coordinate is lower than control - meaning no coverage in control for this position
 		if($ecoord < $ccoord and not $dart_flag or $control_flag){
 			($dart_line, $dart_flag) = read_matrix_line($dart_fh, $last_dart_line);
@@ -482,60 +482,90 @@ my @filtered_sites = mce_loop
 		#case when control coordinates are lower than edit - no coverage at given position - read next line
 		elsif(($ecoord > $ccoord and not $control_flag or $dart_flag) and not $genome){
 			($control_line, $control_flag) = read_matrix_line($control_fh, $last_control_line); 
-		}
-		#case when both lines are the same coordinate
-		else{
+		}else{
 			my @outline;
-			if (defined $pos_array_for->lookup($ecoord)){
-				my $strand = "+";
-				my $ID = $pos_array_for->lookup($ecoord);
+			my $dart_strand;
+			my $control_strand;
+			if(defined $dart->{$ecoord}->{strand}){
+				if (defined $pos_array_for->lookup($ecoord) or defined $pos_array_rev->lookup($ecoord) ){
+					$dart_strand=$dart->{$ecoord}->{strand};
+					if (not defined $control->{$ecoord}->{strand}){
+						$control_strand = $dart_strand;# if no coverage, or genomic assign same strand
+					}else{
+						$control_strand = $control->{$ecoord}->{strand}; #otherwise get strand
+					}
+					if ($dart_strand eq $control_strand){ #when both strands are the same
+						
+						if ($dart_strand eq "-" and defined $pos_array_rev->lookup($ecoord)){
+							my $ID = $pos_array_rev->lookup($ecoord);
+							@outline = find_sites($chr, $ID, $ecoord, $dart_strand, $control, $dart, \$chrom_seq)
+						}elsif ($dart_strand eq "+" and defined $pos_array_for->lookup($ecoord)){
+							my $ID = $pos_array_for->lookup($ecoord);
+							@outline = find_sites($chr, $ID, $ecoord, $dart_strand, $control, $dart, \$chrom_seq)
+						}				
+					}elsif($dart_strand eq "+"){ # case when dart is ahead of control # - before + #
+						($control_line, $control_flag) = read_matrix_line($control_fh, $last_control_line); 
+					}elsif($dart_strand eq "-"){ # this is when dart is behind control
+						if(not $fallback){
+							($dart_line, $dart_flag) = read_matrix_line($dart_fh, $last_dart_line);
+						}elsif(defined $pos_array_rev->lookup($ecoord)){
+							my $ID = $pos_array_rev->lookup($ecoord);
+							@outline = find_sites($chr, $ID, $ecoord, $dart_strand, $control, $dart, \$chrom_seq)
+						}
+					}
+				}
+				if (@outline){
+					my $strand = $outline[5];
+					push(@outline, $barcode) if $barcode_option; # add barcode when processing them
+					my $result = join("\t", @outline);
+					if (defined $excluded_sites->{$chr}->{$ecoord})	{push(@bad_sites, $result);}
+					else{MCE->say ($out_fh, $result);}
+					@outline = ();
+				}
+				$dart ={};
+				$control = {};	
+				($dart_line, $dart_flag) = read_matrix_line($dart_fh, $last_dart_line); # read next line
+			}else{
+				if (defined $pos_array_for->lookup($ecoord)){
+					my $strand = "+";
+					my $ID = $pos_array_for->lookup($ecoord);
+					@outline = find_sites($chr, $ID, $ecoord, $strand, $control, $dart, \$chrom_seq);
+				}
 			
-				@outline = find_sites($chr, $ID, $ecoord, $strand, $control, $dart, \$chrom_seq);
-			}
-			if (@outline){
-				my $strand = $outline[5];
-				push(@outline, $barcode) if $barcode_option; # add barcode when processing them
-				my $result = join("\t", @outline);
-				
-				if (defined $excluded_sites->{$chr}->{$ecoord})	{
-					push(@bad_sites, $result);
+				if (@outline){
+					my $strand = $outline[5];
+					push(@outline, $barcode) if $barcode_option; # add barcode when processing them
+					my $result = join("\t", @outline);
+					if (defined $excluded_sites->{$chr}->{$ecoord})	{push(@bad_sites, $result);}
+					else{MCE->say ($out_fh, $result);}
+					@outline = ();
 				}
-				else{	
-					MCE->say ($out_fh, $result);
+				if (defined $pos_array_rev->lookup($ecoord)){
+					my $strand = "-";
+					my $ID = $pos_array_rev->lookup($ecoord);
+					@outline = find_sites($chr, $ID, $ecoord, $strand, $control, $dart, \$chrom_seq);
 				}
-			@outline = ();
-			}
-			if (defined $pos_array_rev->lookup($ecoord)){
-				my $strand = "-";
-				my $ID = $pos_array_rev->lookup($ecoord);
+				if (@outline){
+					my $strand = $outline[5];
+					push(@outline, $barcode) if $barcode_option;
 			
-				@outline = find_sites($chr, $ID, $ecoord, $strand, $control, $dart, \$chrom_seq);
-			}
-			if (@outline){
-				my $strand = $outline[5];
-				push(@outline, $barcode) if $barcode_option;
-		
-				my $result = join("\t", @outline);
+					my $result = join("\t", @outline);
 
-				if (defined $excluded_sites->{$chr}->{$ecoord}){
-					push(@bad_sites, $result);
+					if (defined $excluded_sites->{$chr}->{$ecoord}){push(@bad_sites, $result);}
+					else{MCE->say ($out_fh, $result);}
+					@outline = ();
 				}
-				else{
-					MCE->say ($out_fh, $result);  
-				}
-			@outline = ();
-			}
-
 			$dart ={};
 			$control = {};			
 			
 			($dart_line, $dart_flag) = read_matrix_line($dart_fh, $last_dart_line); # read next line
 
-		}
+			}
 
 		$last_control_line = $control_line;
 		$last_dart_line = $dart_line;
 
+		}
 	}
 	close ($dart_fh);
 	delete $excluded_sites->{$chr} if defined $excluded_sites->{$chr};
@@ -544,7 +574,7 @@ my @filtered_sites = mce_loop
 	MCE->exit(42, "$chr");
 }\@chr_list;
 
-# sort output files and pritn excluded_sites if necessary
+# sort output files and print excluded_sites if requested
 if ($OUTFILE){
 	$OUTFILE =~ /(.+)\.[^.]+$/;
 	my $path_name = $1;
@@ -580,8 +610,6 @@ else{
 		say STDERR "$excluded_sites were excluded from the analysis" if $verbose;
 	}
 }
-
-
 
 ### subroutines ###
 
@@ -645,13 +673,14 @@ sub read_matrix_line {
 sub load_line {
 	my $line = shift @_;
 	my %hash;
-	my($coord, $A, $T, $C, $G, $N, $total) = (split(/\t/, $line))[1,2,3,4,5,6,7];
+	my($coord, $A, $T, $C, $G, $N, $total,$strand) = (split(/\t/, $line))[1,2,3,4,5,6,7,8];
 	$hash{$coord}{A} = $A;
 	$hash{$coord}{T} = $T;
 	$hash{$coord}{C} = $C;
 	$hash{$coord}{G} = $G;
 	$hash{$coord}{N} = $N;
 	$hash{$coord}{total} = $total;
+	$hash{$coord}{strand} = $strand;
 	return (\%hash,$coord);
 }
 
@@ -671,18 +700,27 @@ sub find_sites {
 
 	#load DART site first, avoid fetching genomic sequencing when using the genome option
 
-	## define values for dart dataset
 	my $dart_non_edit = ($strand eq '+') ? $dart->{$bp}->{$noneditbase} : $dart->{$bp}->{$noneditbaseREV}; 
 	my $dart_edit = ($strand eq '+') ? $dart->{$bp}->{$editbase} : $dart->{$bp}->{$editbaseREV}; 
 	
 	return if ($dart_non_edit + $dart_edit == 0); 
 	return unless ($dart_edit >= $min_edit_site);
 
-	#edit for output
-	my $dart_total = $dart->{$bp}->{total} - $dart->{$bp}->{N};
-	return if  $dart_total < $Edited_mincovthresh;
+	my $dart_total = $dart->{$bp}->{total} - $dart->{$bp}->{N}; 
+	return if  $dart_total < $Edited_mincovthresh; 
+	
 	my $dart_edit_ratio = $dart_edit / $dart_total;
-	return if ($dart_edit_ratio < $low_thresh or $dart_edit_ratio > $high_thresh);   
+	return if ($dart_edit_ratio < $low_thresh or $dart_edit_ratio > $high_thresh); 
+	
+	my $dart_others = $dart_total - $dart_non_edit - $dart_edit;
+	my $other_ratio  = $dart_others/$dart_total;
+	if ($max_bkg){
+		return if $other_ratio >= $max_bkg; # return if ratio of mutations is higher than max allowed levels of background mutation 
+	}
+	if ($bkg_ratio){ 
+		return if ($dart_edit_ratio <= $other_ratio * $bkg_ratio);
+	} 
+	
 	my $dart_edit_ratio_out = sprintf( "%.4f", $dart_edit_ratio);
 
 	my $dart_edit_conf;
@@ -696,18 +734,8 @@ sub find_sites {
 	#process control 
 	my ($control_non_edit,$control_edit, $control_total, $base); #declare variables
 	if ($genome or ($fallback and (! defined $control->{$bp}->{'total'} or $control->{$bp}->{'total'} < $Control_mincovthresh))){
-		# my $nuc = $dbFasta->seq($chr, $bp => $bp);
 		my $nuc = uc(substr ($$chrom_seq_ref, $bp-1, 1));
-		$control={}; # reinitialize
-
-		$control->{$bp}->{A} += 0;
-		$control->{$bp}->{T} += 0;
-		$control->{$bp}->{C} += 0;
-		$control->{$bp}->{G} += 0;
-		$control->{$bp}->{N} += 0;
-		$control->{$bp}->{$nuc} += $Control_mincovthresh;
-		$control->{$bp}->{total} += $Control_mincovthresh;
-		$control->{$bp}->{'tag'} = 'g';
+		$control = getEmptyHash($bp, $nuc);
 	}
 	
 	$control_non_edit = ($strand eq '+') ? $control->{$bp}->{$noneditbase} : $control->{$bp}->{$noneditbaseREV}; 
@@ -721,6 +749,12 @@ sub find_sites {
 	#edit for output
 	my $control_edit_ratio = $control_edit / $control_total;
 	return if ($control_edit_ratio > 0.0 && $dart_edit_ratio/$control_edit_ratio < $WToverKO ); ## this is hard cutoff for edit DART/mut
+
+	my $control_others = $control_total - $control_non_edit - $control_edit;
+	my $other_ratio_ctrl  = $control_others/$control_total;
+	if ($max_bkg){
+		return if $other_ratio_ctrl >= $max_bkg; # return if ratio of mutations is higher than max allowed levels of background mutation 
+	}
 
 	my $control_edit_ratio_out = ($control_edit_ratio != 0) ? sprintf( "%.4f", $control_edit_ratio) : 0  ;
 
@@ -758,29 +792,27 @@ sub find_sites {
 	return @outline;
 }
 
-## helper function
-sub max {
-	my $n1 = shift;
-	my $n2 = shift;
-	if($n1 > $n2) {
-		return $n1;
-	}
-	else{
-		return $n2;
-	}
+sub getEmptyHash{
+
+	my $bp = shift @_;
+	my $nuc = shift @_;
+
+	my $hash_ref={};
+
+	$hash_ref->{$bp}->{A} += 0;
+	$hash_ref->{$bp}->{T} += 0;
+	$hash_ref->{$bp}->{C} += 0;
+	$hash_ref->{$bp}->{G} += 0;
+	$hash_ref->{$bp}->{N} += 0;
+	$hash_ref->{$bp}->{$nuc} += $Control_mincovthresh;
+	$hash_ref->{$bp}->{total} += $Control_mincovthresh;
+	$hash_ref->{$bp}->{'tag'} = 'g';
+
+	return $hash_ref;
+
 }
 
-sub min {
-	my $n1 = shift;
-	my $n2 = shift;
-	if($n1 < $n2){
-		return $n1;
-	}
-	else{
-		return $n2;
-	}
-}
-
+## helper sub
 sub log10 { 
     my $n = shift; 
     return log($n) / log(10); 
@@ -809,7 +841,7 @@ sub check_chr{
 }
 
 ## print a bed6 file, used if bed6 is asked as output
-sub print_bed(){
+sub print_bed{
 	my $file = shift @_;
 
 	$file =~ /(.+)\.[^.]+$/;
