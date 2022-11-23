@@ -1,10 +1,11 @@
 #!/usr/bin/env perl
 
  ### Author : Mathieu Flamand - Duke University
- ### version : 1.4.2 
+ ### version : 1.4.3 
  ### date of last modification : 2022-11-23
 
  ### This scripts parse BAM files to output a tabix compressed, tab separated file containing the number of each nucleotide at each position in the genome
+#!/usr/bin/env perl
 
 use strict;
 use warnings;
@@ -16,8 +17,9 @@ use MCE::Loop;
 use File::Path;
 use Array::IntSpan; 
 use List::Util qw(min);
+use Data::Dumper;
 
-my ($file, $verbose, $outfile, $max_barcode,$read_thresh, $barcode_filter, $remove_duplicate,$remove_MM, $cell_ID_flag,$bc_pattern,$stranded,$skip_paired,$help);
+my ($file, $verbose, $outfile, $max_barcode,$read_thresh, $barcode_filter, $remove_duplicate,$remove_MM, $cell_ID_flag,$bc_pattern,$stranded,$help);
 my $mode = "bulk";
 my $min_cov = 1;
 my $time_out = 7200;
@@ -44,7 +46,6 @@ GetOptions ("i|input:s"=>\$file,
 			"mem=i"=>\$memory,
             "ribosome:s"=>\$exclude,
             "stranded"=>\$stranded,
-            "noPairedCheck"=>\$skip_paired,
 		) or die "Error in command line arguments, please use --help for information on usage\n";;
 
 my $usage = "$0 -i input.bam (--cpu 1 -o output.matrix -b barcode.txt -min 1 -nb 1000 -rt 50000 --verbose)";
@@ -79,7 +80,7 @@ unless ($sorted_tag =~ /coordinate/){
 }
 
 if ($bc_pattern){
-	if ($bc_pattern =~ /10x/i){$bc_pattern = 'CB:Z:';}
+	if ($bc_pattern =~ /10x/i){$bc_pattern = 'CB:?Z?:';}
 	elsif ($bc_pattern =~ /SMART/i) {$bc_pattern = 'RG:Z:';}  
 	say "using regex $bc_pattern for Cell ID" if $verbose;
 }
@@ -177,9 +178,9 @@ if($mode eq "SingleCell"){
             my($flag,$start,$matchinfo,$seq) = (split(/\t/,$line))[1,3,5,9];
             my $strand = "NS";
             $flag = sprintf ("%012b", $flag);
-            my ($dup,$secondary_alignement,$first, $second, $m_reverse, $reverse,$paired) = (split (//, $flag))[1,3,4,5,6,7,11];
+            my ($dup,$secondary_alignement,$first, $second, $m_reverse, $reverse,$mapped,$paired) = (split (//, $flag))[1,3,4,5,6,7,9,11];
        
-            next LINE if $paired eq 0 and !$skip_paired;
+            next LINE if $mapped ne 0;
             ### check for PCR/optical duplicates and remove if needed ###
             if ($remove_duplicate or $remove_MM){
                 if ($remove_duplicate){
@@ -273,8 +274,8 @@ if($mode eq "SingleCell"){
             my($flag,$start,$matchinfo,$seq) = (split(/\t/,$line))[1,3,5,9];
             my $strand = "NS";
             $flag = sprintf ("%012b", $flag);
-            my ($dup,$secondary_alignement,$first, $second, $m_reverse, $reverse,$paired) = (split (//, $flag))[1,3,4,5,6,7,11];
-            next LINE if $paired eq 0;
+            my ($dup,$secondary_alignement,$first, $second, $m_reverse, $reverse,$mapped, $paired) = (split (//, $flag))[1,3,4,5,6,7,9,11];
+            next LINE if $mapped ne 0;
         
             if($remove_duplicate or $remove_MM){
                 if ($remove_duplicate){
