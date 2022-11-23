@@ -1,8 +1,8 @@
 #!/usr/bin/env perl
 
  ### Author : Mathieu Flamand - Duke University
- ### version : 1.4.1 
- ### date of last modification : 2022-8-22
+ ### version : 1.4.2 
+ ### date of last modification : 2022-11-23
 
  ### This scripts parse BAM files to output a tabix compressed, tab separated file containing the number of each nucleotide at each position in the genome
 
@@ -17,7 +17,7 @@ use File::Path;
 use Array::IntSpan; 
 use List::Util qw(min);
 
-my ($file, $verbose, $outfile, $max_barcode,$read_thresh, $barcode_filter, $remove_duplicate,$remove_MM, $cell_ID_flag,$bc_pattern,$stranded,$help);
+my ($file, $verbose, $outfile, $max_barcode,$read_thresh, $barcode_filter, $remove_duplicate,$remove_MM, $cell_ID_flag,$bc_pattern,$stranded,$skip_paired,$help);
 my $mode = "bulk";
 my $min_cov = 1;
 my $time_out = 7200;
@@ -44,6 +44,7 @@ GetOptions ("i|input:s"=>\$file,
 			"mem=i"=>\$memory,
             "ribosome:s"=>\$exclude,
             "stranded"=>\$stranded,
+            "noPairedCheck"=>\$skip_paired,
 		) or die "Error in command line arguments, please use --help for information on usage\n";;
 
 my $usage = "$0 -i input.bam (--cpu 1 -o output.matrix -b barcode.txt -min 1 -nb 1000 -rt 50000 --verbose)";
@@ -177,7 +178,8 @@ if($mode eq "SingleCell"){
             my $strand = "NS";
             $flag = sprintf ("%012b", $flag);
             my ($dup,$secondary_alignement,$first, $second, $m_reverse, $reverse,$paired) = (split (//, $flag))[1,3,4,5,6,7,11];
-            next LINE if $paired eq 0;
+       
+            next LINE if $paired eq 0 and !$skip_paired;
             ### check for PCR/optical duplicates and remove if needed ###
             if ($remove_duplicate or $remove_MM){
                 if ($remove_duplicate){
@@ -208,14 +210,14 @@ if($mode eq "SingleCell"){
                 }
                 $counter = 0; #reset counter
             }
-      
+
             ($matchinfo, $seq) = parse_cigar($matchinfo, $seq);
             my @matches= $matchinfo =~ /(\d+M)/g;
             my @skip = $matchinfo =~ /(\d+N)/g;
             my @datapts = split('',$seq); # split sequence in each nucleotide
             
             my $offset = 0;
-
+            
             # for each matching region in cigar, splice sequence and adjust starting position with offset
             for (my $i = 0; $i <= $#matches; $i++ ){
                 my $match = $matches[$i];
@@ -223,7 +225,6 @@ if($mode eq "SingleCell"){
                 my $length = $1;
                 if ($i > 0) { $skip[$i-1] =~ /(\d+)N/; $offset += $1;}
                 my @sequence = splice(@datapts,0,$length );
-
                 for (my $j = 0; $j <= $#sequence; $j++){
                     my $base = $sequence[$j];
                     next if $base eq '-';	
@@ -231,7 +232,7 @@ if($mode eq "SingleCell"){
                     if ($exclude){
                         next if defined  $hr_exclude->{$chr}->lookup($bp) ;
                     }
-                    $matrix->{$barcode}->{$bp}->{$base}++;
+                    $matrix->{$barcode}->{$strand}->{$bp}->{$base}++;
                     foreach my $b ("A","T","C","G","N"){$matrix->{$barcode}->{$strand}->{$bp}->{$b}+= 0;} 
                 }
                 $offset += $#sequence + 1;
