@@ -1,8 +1,8 @@
 #!/usr/bin/env perl
  
  ### Author : Mathieu Flamand - Duke University
- ### version : 1.5.0
- ### date of last modification : 2022-8-16
+ ### version : 1.5.1
+ ### date of last modification : 2022-12-6
  
 ### This programs identifies editing sites by comparing a DART/TRYBE matrix to a control matrix file or to the genomic sequence. 
 ### For strand information, a refFlat file is provided, sites found within annotated features will be  idenitified according to provided settings.
@@ -23,7 +23,7 @@ $|=1;
 my $USAGE = "$0 --annotationFile refFlat --EditedMatrix DART_RNA_matrix --controlMatrix control_RNA_matrix --outfile output_file\n";
 
 ###set option of program using Getopt::long
-my ($annotationfile,$known_sites, $tablename, $ControlTableName, $OUTFILE, $verbose, $help, $bed_option,$barcode_option, $intron_flag, $genome,$extUTR,$dbFasta,$fallback,$score,$bed_flag)='';
+my ($annotationfile,$known_sites, $tablename, $ControlTableName, $OUTFILE, $verbose, $help, $bed_option,$barcode_option, $intron_flag, $genome,$extUTR,$dbFasta,$fallback,$score,$bed_flag,$skip_chr_check)='';
 my @bedfiles;
 
 
@@ -73,6 +73,7 @@ GetOptions ("a|annotationFile:s"=>\$annotationfile,
 			"MaxBckg:s"=>\$max_bkg,
 			"BckgRatio:s"=>\$bkg_ratio,
 			"stranded"=>\$stranded,
+			"skip-chr-check"=>\$skip_chr_check,
 		) or error_out();
 
 
@@ -112,7 +113,7 @@ if ($annotationfile){$annotation_stem = check_chr($annotationfile, 2);}
 elsif($known_sites){$annotation_stem = check_chr($known_sites, 0);}
 
 my $table_stem = check_chr($tablename, 0);
-if ($table_stem =~ /^chr/i and ! $annotation_stem =~ /^chr/i){say "Error, annotation file and matrix files do not have the same chromosome annotation. Cannot match UCSC or Ensembl style."; exit();}
+if (! $skip_chr_check and $table_stem =~ /^chr/i and ! $annotation_stem =~ /^chr/i){say "Error, annotation file and matrix files do not have the same chromosome annotation. Cannot match UCSC or Ensembl style."; exit();}
 
 ### Parse options ###
 #initialize db if needed
@@ -128,7 +129,7 @@ if ($fallback) {
 	if( $IDs[0] =~/^chr/){$genome_stem = 'chr';}
 }
 if($genome or $fallback){
-	if ($table_stem =~ /^chr/i and $genome_stem ne 'chr'){say "Error, genome file and matrix files do not have the same chromosome annotation. Cannot match UCSC or Ensembl style."; exit();}
+	if (! $skip_chr_check and $table_stem =~ /^chr/i and $genome_stem ne 'chr'){say "Error, genome file and matrix files do not have the same chromosome annotation. Cannot match UCSC or Ensembl style."; exit();}
 }
 
 say "processing using $ncpu cpu cores" if $verbose; 
@@ -194,7 +195,7 @@ if (@bedfiles){
 	say "sites in files: @bedfiles will not be considered in analysis";# if $verbose;
 	foreach my $files (@bedfiles){
 	my $bed_stem = check_chr($files,0);
-	if ($bed_stem =~ /^chr/i and ! $annotation_stem =~ /^chr/i){say "Error, annotation file and bed files do not have the same chromosome annotation. Cannot match UCSC or Ensembl style."; exit();}
+	if (! $skip_chr_check and $bed_stem =~ /^chr/i and ! $annotation_stem =~ /^chr/i){say "Error, annotation file and bed files do not have the same chromosome annotation. Cannot match UCSC or Ensembl style."; exit();}
 	
 	open(my $fh, "<",  $files);
 	while(<$fh>){

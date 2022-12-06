@@ -1,8 +1,8 @@
  #!/usr/bin/env perl
  
  ### Author : Mathieu Flamand - Duke University
- ### version : 0.1
- ### date of creation: 2022-4-12 
+ ### version : 0.2
+ ### date of creation: 2022-12-06 
  
 ### This scripts converts a gtf file to a refFlat file for use in Bullseye
 ### The GTF file needs to have the following fields: gene_name transcript_id transcript_version
@@ -146,6 +146,12 @@ foreach my $chr (sort {$a cmp $b}  keys %genes){
         }
     }
 }
+
+close($out_fh);
+
+my $cmd = "LC_ALL=C sort -f -k3,3 -k5,5n -o $output $output";
+system($cmd) == 0 or die "Failed to sort file $output:$!";
+
 
 sub error_out {
 	say STDERR "\n\n$USAGE";

@@ -1,8 +1,8 @@
 #!/usr/bin/env perl
 
  ### Author : Mathieu Flamand - Duke University
- ### version : 1.4.3 
- ### date of last modification : 2022-11-23
+ ### version : 1.4.4 
+ ### date of last modification : 2022-12-06
 
  ### This scripts parse BAM files to output a tabix compressed, tab separated file containing the number of each nucleotide at each position in the genome
 #!/usr/bin/env perl
@@ -348,7 +348,7 @@ if($mode eq "SingleCell"){
 my $outdir = dirname($outfile); # temp files will be the output folder if they are needed
 my $sort_memory = int($memory*0.8); # use 80% of available memory for sorting
 # fast in place sort with C locale
-my $cmd = "LC_ALL=C sort -k1,1 -k2,2n ";
+my $cmd = "LC_ALL=C sort -f -k1,1 -k2,2n ";
 $cmd .= "-k9,9 " if $stranded;
 $cmd .= "--parallel=$ncpu -T $outdir -S${sort_memory}M -o $outfile $outfile";
 say $cmd if $verbose;
