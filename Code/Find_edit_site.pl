@@ -1,8 +1,8 @@
 #!/usr/bin/env perl
  
  ### Author : Mathieu Flamand - Duke University
- ### version : 1.5.1
- ### date of last modification : 2022-12-6
+ ### version : 1.5.2
+ ### date of last modification : 2022-12-12
  
 ### This programs identifies editing sites by comparing a DART/TRYBE matrix to a control matrix file or to the genomic sequence. 
 ### For strand information, a refFlat file is provided, sites found within annotated features will be  idenitified according to provided settings.
@@ -121,12 +121,14 @@ my $genome_stem='';
 if ($genome) {
 	$dbFasta = Bio::DB::Fasta->new($genome);
 	my @IDs = $dbFasta->get_all_primary_ids;
-	if( $IDs[0] =~ /^chr/){$genome_stem = 'chr';}
+	my @sorted_IDS = sort { "\L$a" cmp "\L$b" } @IDs;
+	if( $sorted_IDS[0] =~ /^chr/){$genome_stem = 'chr';}
 }
 if ($fallback) {
 	$dbFasta = Bio::DB::Fasta->new($fallback);
 	my @IDs = $dbFasta->get_all_primary_ids;
-	if( $IDs[0] =~/^chr/){$genome_stem = 'chr';}
+		my @sorted_IDS = sort { "\L$a" cmp "\L$b" } @IDs;
+	if( $sorted_IDS[0] =~ /^chr/){$genome_stem = 'chr';}
 }
 if($genome or $fallback){
 	if (! $skip_chr_check and $table_stem =~ /^chr/i and $genome_stem ne 'chr'){say "Error, genome file and matrix files do not have the same chromosome annotation. Cannot match UCSC or Ensembl style."; exit();}
@@ -462,8 +464,7 @@ my @filtered_sites = mce_loop
 	# process both edited matrix anx control matrix in parallel (unless genome option is used)
 	while($dart_line and ($control_line or $genome)){
 		last if $dart_flag;
-		$barcode = (split(/\t/, $dart_line))[8] if $barcode_option;
-
+		$barcode = (split(/\t/, $dart_line))[-1] if $barcode_option;
 		#load current lines in hash_ref
 		my ($dart, $ecoord) = load_line($dart_line);
 		my ($control, $ccoord) = load_line($control_line) unless ($genome);
@@ -487,6 +488,7 @@ my @filtered_sites = mce_loop
 			my @outline;
 			my $dart_strand;
 			my $control_strand;
+	
 			if(defined $dart->{$ecoord}->{strand}){
 				if (defined $pos_array_for->lookup($ecoord) or defined $pos_array_rev->lookup($ecoord) ){
 					$dart_strand=$dart->{$ecoord}->{strand};
@@ -675,6 +677,11 @@ sub load_line {
 	my $line = shift @_;
 	my %hash;
 	my($coord, $A, $T, $C, $G, $N, $total,$strand) = (split(/\t/, $line))[1,2,3,4,5,6,7,8];
+	if ($strand){
+		#This  is in the case where we have barcoded and stranded data  
+		unless($strand =~ /^[+-]/){
+			undef $strand;}
+	}
 	$hash{$coord}{A} = $A;
 	$hash{$coord}{T} = $T;
 	$hash{$coord}{C} = $C;
