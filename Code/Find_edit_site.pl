@@ -641,6 +641,7 @@ complete list of options:
 	--ControlMinCoverage	: minimum coverage for in control file for sites to be considered: if using genome and score option, this number will be used for computation. defaults to 10 (i)
 	--EditedMinCoverage	: minimum coverage for in control file for sites to be considered: defaults to 10 (i)
 	--outfile		: Output bed file, defaults to STDOUT (s)
+	--SingleCell	: Use for processing of single cell data
 	--bed6			: output an extra bed6 file, if -o is used, usual file will be generates as .bed, and and extra BED6 will be used with .bed6
 	--verbose		: display extra log information
 	--inton			: site detection will be done in both exons and introns
