@@ -33,6 +33,3 @@ else
 	perl -F'\t' -ane 'if($F[5] =~ /\+/){ $F[1] += 2; } else { $F[2] -= 2; } if( $F[-1] =~ m/[AG]AC/i ){ print join "\t", @F }' $STEM.3nt.sequence.bed > $STEM.RAC.bed
 	rm $STEM.3nt.sequence.bed
 fi
-
-
-
