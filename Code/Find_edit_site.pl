@@ -1,10 +1,10 @@
 #!/usr/bin/env perl
  
- ### Author : Mathieu Flamand - Duke University
- ### version : 1.5.2
- ### date of last modification : 2022-12-12
+ ### Author : Mathieu Flamand - Universite Laval
+ ### version : 1.5.3
+ ### date of last modification : 2024-10-4
  
-### This programs identifies editing sites by comparing a DART/TRYBE matrix to a control matrix file or to the genomic sequence. 
+### This programs identifies editing sites by comparing a DART/TRIBE matrix to a control matrix file or to the genomic sequence. 
 ### For strand information, a refFlat file is provided, sites found within annotated features will be  idenitified according to provided settings.
 
 use v5.26;
@@ -832,7 +832,11 @@ sub check_chr{
 	my ($file, $index) = @_;
 	my $fh;
 	if ($file =~ /\.gz$/){
-		open($fh, "zcat $file | head -5 |") or die "Cannot open ($file) for reading: $!";
+		if ($^O eq "darwin"){
+		open($fh, "gzcat $file | head -5 |") or die "Cannot open ($file) for reading: $!\n";
+		}else{
+		open($fh, "zcat $file | head -5 |") or die "Cannot open ($file) for reading: $!\n";
+		}
 	} 
 	else{
 		open($fh, '<', $file) or die "Cannot open ($file) for reading: $!";

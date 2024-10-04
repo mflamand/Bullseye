@@ -25,7 +25,11 @@ GetOptions ("i|gtf=s"=>\$input,
 
 my $in_fh;
 if ($input =~ /.gz$/){
-   	open($in_fh, "zcat $input |") or die "Can't zcat $input for reading: $!\n";
+   	if ($^O eq "darwin"){
+	open($in_fh, "gzcat $input |") or die "Can't zcat $input for reading: $!\n";
+	}else{
+	open($in_fh, "zcat $input |") or die "Can't zcat $input for reading: $!\n";
+	}
 }else{
     open($in_fh, "<", $input) or die "Can't read $input: $!\n";
 }
