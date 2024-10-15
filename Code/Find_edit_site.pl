@@ -865,6 +865,7 @@ sub print_bed{
 	open(my $bed_fh, ">" ,"$bed_file") or croak "Can't open $bed_file for writing";
 
 	foreach (<$fh>){
+		next if $_=~/^[\#\n]/;
 		my @out = (split("\t",$_))[0..5];
 		my $barcode = (split("\t",$_))[-1] if $barcode_option;;
 		push @out, $barcode  if $barcode_option;
