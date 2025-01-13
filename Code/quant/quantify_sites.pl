@@ -393,7 +393,7 @@ sub check_chr
 	my $fh;
 	if ($file =~ /\.gz$/)
 	{
-		open($fh, "zcat $file | head -5 |") or die "Cannot open ($file) for reading: $!";
+		open($fh, "gunzip -c $file | head -5 |") or die "Cannot open ($file) for reading: $!";
 	} 
 	else
 	{
