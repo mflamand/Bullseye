@@ -4,9 +4,10 @@
 cbp1 <- c("#999999", "#E69F00", "#56B4E9", "#009E73",
           "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
 
-# theme
 
-library(aod)
+
+
+# theme
 
 theme_mf <- function(){
   
@@ -19,20 +20,30 @@ theme_mf <- function(){
   
 }
 
+# Libraries
+
+library(aod)
+
 # glm helper function
 
+### Function for betabinomial distribution
 glm_comp_bbn<-function(df, design, lev,comp){
   
   facts_comp<-levels(df[[comp]])[[1]]
   df<-subset(df, df$cov != 0)
   df$non_mut<-df$cov-df$mut
+  
+  
+  # to avoid issues when no mutations are found in any samples, we add pseudocounts to the model. These are 0.5% of the geometric mean of the coverage data.
+  baseMean<-(df %>% summarise(baseMean= exp(mean(log(cov+0.5)))*0.005))$baseMean
+  df<-df%>% mutate(cov= cov +baseMean,mut=mut+baseMean)
 
   facts<-levels(droplevels(df[[comp]]))
   test_res<-NULL
   
   design1<-design[[2]]
   lev=paste0(design1,lev)
-  
+  levLFC<-paste0(lev,"LFC")
   
   if (length(facts) < 2  || !facts_comp %in% facts){ 
     p<-as.vector(rep(NA,length(lev)),mode="list")
@@ -44,7 +55,7 @@ glm_comp_bbn<-function(df, design, lev,comp){
     test_res<-try(vcov(mod),silent=TRUE)
   }
   
-  if(is.null(test_res) || class(test_res)=="try-error"){
+  if(is.null(test_res) ){.   ###|| class(test_res)=="try-error"
     p<-as.vector(rep(NA,length(lev)),mode="list")
     names(p)<-lev
     return(p)
@@ -88,11 +99,15 @@ glm_comp_bbn<-function(df, design, lev,comp){
   return(p[ names(p) %in% lev])
 }
 
-
+# Function for GLM binomial, quasibinomial or betargression (like) distribution
 glm_comp_bn<-function(df, design, lev,comp,link="binomial"){
   
   facts_comp<-levels(df[[comp]])[[1]]
   df<-subset(df, df$cov != 0)
+  
+  baseMean<-(df %>% summarise(baseMean= exp(mean(log(cov+0.5)))*0.005))$baseMean
+  df<-df%>% mutate(cov= cov +baseMean,mut=mut+baseMean)
+  
   canonicalOrder <- function(term) {
     tt <- strsplit(term, ":")
     tt <- lapply(tt, sort)
@@ -128,7 +143,6 @@ glm_comp_bn<-function(df, design, lev,comp,link="binomial"){
   }
   else{
     mod<-glm(formula=design,data=df,weights = cov, family=link)
-    
     design<-design[[3]]
     lev=paste0(design,lev)
     levLFC<-paste0(lev,"LFC")
@@ -193,12 +207,15 @@ glm_comp_bn<-function(df, design, lev,comp,link="binomial"){
 }
 
 
+
+
 #function to calculate glm and p value
 
-Bullseye<-function(data_cov,data_mut, colData=NULL, filter.col=NULL, filter.with=NULL, min=0.05, filter.sites=NULL,dataset=NULL,design=NULL, min.cov=10, return.df.only=FALSE, link='betabin', numCores=1){
+Bullseye<-function(data_cov,data_mut, colData=NULL, filter.col=NULL, filter.with=NULL, min=0.05, filter.sites=NULL,dataset=NULL,design=NULL, min.cov=10, return.df.only=FALSE, link='betabin',numCores=1){
 
   #filter.sites : needs to be "all" or "called", if all: will only keep sites with at least min edit in one or the other samples. If "called": will keep samples with at least min in both conditions. 
-  if(link != 'betabin' && link != 'bin' && link != 'quasibinomial') stop('Please use link="betabin", link="bin" or link="quasibinomial')
+  if(link != 'betabin' && link != 'bin' && link != 'quasibinomial' && link !="betareg") stop('Please use link="betabin", link="bin" or link="quasibinomial')
+
   
   if(is.null(colData)) stop("please provide colData with sample information for filtering")
   if(is.null(design)) stop("please provide design formula with a factor found in colData (eg. ~Genotype)")
@@ -263,16 +280,24 @@ Bullseye<-function(data_cov,data_mut, colData=NULL, filter.col=NULL, filter.with
     pivot_longer(names_to = "sample",cols = !c(site,n),values_to = "mut")
   
   data_long <- suppressMessages(dplyr::left_join(L_cov,L_mut))
+  data_long<-data_long %>% mutate(edit=mut/cov)
+  # baseMean<- data_long %>% group_by(site) %>% summarise(baseMean= exp(mean(log(cov+0.5)))*0.005) 
+  # data_long<-data_long %>% mutate(mut=mut+1, cov=cov+1)
   n_data<-data_long%>% group_by(site) %>% nest()
   
-  if (link =="bin"){
-    results<-parallel::mclapply(X = n_data$data, FUN = glm_comp_bn,design=formula(paste0("mut/cov",deparse(design))), lev=design_levels,comp=design[[2]], mc.cores = numCores)
+  # return(n_data)
+  
+  if (link == "bin"){
+    results<-parallel::mclapply(X = n_data$data, FUN = glm_comp_bn,design=formula(paste0("mut/cov",deparse(design))), lev=design_levels,comp=design[[2]],link="binomial",mc.cores = numCores)
   }
   else if (link =="quasibinomial"){
-    results<-parallel::mclapply(X = n_data$data, FUN = glm_comp_bn,design=formula(paste0("mut/cov",deparse(design))), lev=design_levels,comp=design[[2]],link="quasibinomial", mc.cores = numCores)
+    results<-parallel::mclapply(X = n_data$data, FUN = glm_comp_bn,design=formula(paste0("mut/cov",deparse(design))), lev=design_levels,comp=design[[2]],link="quasibinomial",mc.cores = numCores)
   }
   else if (link =="betabin"){
-    results<-parallel::lapply(X = n_data$data, FUN = glm_comp_bbn,design=design, lev=design_levels,comp=design[[2]], mc.cores = numCores)
+    results<-parallel::mclapply(X = n_data$data, FUN = glm_comp_bbn,design=design, lev=design_levels,comp=design[[2]],mc.cores = numCores)
+  }
+  else if (link =="betareg"){
+    results<-parallel::mclapply(X = n_data$data, FUN = glm_comp_bn,design=formula(paste0("mut/cov",deparse(design))), lev=design_levels,comp=design[[2]],link=quasi(link="logit", variance="mu(1-mu)"),mc.cores = numCores)
   }
   # return(results)
   results<-do.call(rbind.data.frame, results)
@@ -295,13 +320,13 @@ Bullseye<-function(data_cov,data_mut, colData=NULL, filter.col=NULL, filter.with
     data_edit_A<-suppressMessages(dplyr::mutate(.data=data_cov,
                                                 !!paste0(first.level,"_sum_cov") := rowSums(select(data_cov, matches( first.level.regex,perl=TRUE)),na.rm=TRUE)) %>% 
                                     dplyr::mutate(!!paste0(first.level,"_mut") := rowSums(select(data_mut, matches(first.level.regex,perl=TRUE)),na.rm=TRUE)) %>% 
-                                    mutate(!!first.level := .data[[paste0(first.level,"_mut")]]/.data[[paste0(first.level,"_sum_cov")]]) %>% 
+                                    mutate(!!first.level := (.data[[paste0(first.level,"_mut")]]/.data[[paste0(first.level,"_sum_cov")]]) *n_site) %>% 
                                     mutate(!!paste0(first.level,"_min_cov") := rowSums(!is.na(select(.data=data_edit, matches(first.level.regex,perl=TRUE)))),
                                            !!paste0(first.level,"_called_sites") := rowSums((select(.data=data_edit, matches(first.level.regex,perl=TRUE)))   >= min,na.rm=TRUE )) %>% 
                                     mutate(!!paste0(first.level,"_average_called") := rowMeans(select(.data=data_edit_perc, matches(first.level.regex,perl=TRUE)),na.rm = TRUE)) %>% 
                                     dplyr::mutate(!!paste0(second.level,"_sum_cov") := rowSums(select(.data=data_cov, matches( second.level.regex,perl=TRUE)),na.rm = TRUE)) %>%
                                     dplyr::mutate(!!paste0(second.level,"_mut") := rowSums(select(.data=data_mut, matches(second.level.regex,perl=TRUE)),na.rm = TRUE)) %>% 
-                                    mutate(!!second.level := .data[[paste0(second.level,"_mut")]]/.data[[paste0(second.level,"_sum_cov")]],
+                                    mutate(!!second.level := (.data[[paste0(second.level,"_mut")]]/.data[[paste0(second.level,"_sum_cov")]] *n_site),
                                            !!paste0(second.level,"_log2FoldChange") := log2(.data[[second.level]]/.data[[first.level]])) %>% 
                                     mutate(!!paste0(second.level,"_min_cov") := rowSums(!is.na(select(.data=data_edit, matches(second.level.regex,perl=TRUE)))),
                                            !!paste0(second.level,"_called_sites") := rowSums((select(.data=data_edit, matches(second.level.regex,perl=TRUE))) >= min,na.rm=TRUE)) %>% 
