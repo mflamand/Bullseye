@@ -1,11 +1,11 @@
 #!/usr/bin/env perl
- 
- ### Author : Mathieu Flamand - Universite Laval
- ### version : 1.5.3
- ### date of last modification : 2024-10-4
- 
-### This programs identifies editing sites by comparing a DART/TRIBE matrix to a control matrix file or to the genomic sequence. 
-### For strand information, a refFlat file is provided, sites found within annotated features will be  idenitified according to provided settings.
+
+### Author : Mathieu Flamand - Universite Laval
+### version : 1.6.1
+### date of last modification : 2026-05-22
+
+### This programs identifies editing sites by comparing a DART/TRIBE matrix to a control matrix file or to the genomic sequence.
+### For strand information, a refFlat file is provided, sites found within annotated features will be identified according to provided settings.
 
 use v5.26;
 use strict;
@@ -14,9 +14,9 @@ use File::Basename;
 use Getopt::Long;
 use Carp;
 use MCE::Loop;
-use Bio::DB::Fasta;
+use Bio::DB::HTS::Faidx;
 use Math::CDF qw(:all);
-use Array::IntSpan; 
+use Array::IntSpan;
 
 $|=1;
 
@@ -26,10 +26,9 @@ my $USAGE = "$0 --annotationFile refFlat --EditedMatrix DART_RNA_matrix --contro
 my ($annotationfile,$known_sites, $tablename, $ControlTableName, $OUTFILE, $verbose, $help, $bed_option,$barcode_option, $intron_flag, $genome,$extUTR,$dbFasta,$fallback,$score,$bed_flag,$skip_chr_check)='';
 my @bedfiles;
 
-
 ### Read environmental variable for slurm task manager ###
 # if you are not running with SLURM, CPU and available memory can be set with the --cpu #core and --mem 4096 (in Megabytes)
-my $memory = $ENV{'SLURM_MEM_PER_NODE'} // 4096; #4G default for Duke nodes 
+my $memory = $ENV{'SLURM_MEM_PER_NODE'} // 4096; #4G default for Duke nodes
 my $ncpu= $ENV{'SLURM_CPUS_PER_TASK'} // 1;
 
 ###settings for selection of sites
@@ -40,8 +39,8 @@ my $WToverKO = 1.5; #1.5 fold over control default
 my $min_edit_site = 2;
 my $Edited_mincovthresh = 10;
 my $Control_mincovthresh = 10;
-my $max_bkg; 
-my $bkg_ratio; 
+my $max_bkg;
+my $bkg_ratio;
 my $stranded;
 
 ###set option of program using Getopt::long
@@ -76,9 +75,7 @@ GetOptions ("a|annotationFile:s"=>\$annotationfile,
 			"skip-chr-check"=>\$skip_chr_check,
 		) or error_out();
 
-
-# Error checking before running
-if ( $help ) { error_out(); } 
+if ( $help ) { error_out(); }
 if ($annotationfile and $known_sites){
 	say STDERR "Error, please choose either a refflat annotation file (-a) or bed file with known sites (--bedfile), not both";
 	error_out();
@@ -117,38 +114,62 @@ if (! $skip_chr_check and $table_stem =~ /^chr/i and ! $annotation_stem =~ /^chr
 
 ### Parse options ###
 #initialize db if needed
-my $genome_stem='';
+my $genome_stem = '';
+my $faidx;
+
 if ($genome) {
-	$dbFasta = Bio::DB::Fasta->new($genome);
-	my @IDs = $dbFasta->get_all_primary_ids;
-	my @sorted_IDS = sort { "\L$a" cmp "\L$b" } @IDs;
-	if( $sorted_IDS[0] =~ /^chr/){$genome_stem = 'chr';}
+	$faidx = Bio::DB::HTS::Faidx->new($genome);
+	my $fai_file = $genome . ".fai";
+	open(my $fai_fh, "<", $fai_file) or die "Can't open $fai_file: $!";
+	my @ids;
+	while (<$fai_fh>) {
+		chomp;
+		next if /^\s*$/;
+		push @ids, (split(/\t/))[0];
+	}
+	close $fai_fh;
+	my @sorted_ids = sort { "\L$a" cmp "\L$b" } @ids;
+	if (@sorted_ids && $sorted_ids[0] =~ /^chr/) { $genome_stem = 'chr'; }
 }
 if ($fallback) {
-	$dbFasta = Bio::DB::Fasta->new($fallback);
-	my @IDs = $dbFasta->get_all_primary_ids;
-		my @sorted_IDS = sort { "\L$a" cmp "\L$b" } @IDs;
-	if( $sorted_IDS[0] =~ /^chr/){$genome_stem = 'chr';}
+	$faidx = Bio::DB::HTS::Faidx->new($fallback);
+	my $fai_file = $fallback . ".fai";
+	open(my $fai_fh, "<", $fai_file) or die "Can't open $fai_file: $!";
+	my @ids;
+	while (<$fai_fh>) {
+		chomp;
+		next if /^\s*$/;
+		push @ids, (split(/\t/))[0];
+	}
+	close $fai_fh;
+	my @sorted_ids = sort { "\L$a" cmp "\L$b" } @ids;
+	if (@sorted_ids && $sorted_ids[0] =~ /^chr/) { $genome_stem = 'chr'; }
 }
-if($genome or $fallback){
+if ($genome or $fallback) {
+	if (! $skip_chr_check and $table_stem =~ /^chr/i and $genome_stem ne 'chr') {
+		say "Error, genome file and matrix files do not have the same chromosome annotation. Cannot match UCSC or Ensembl style.";
+		exit();
+	}
+}
+if ($genome or $fallback){
 	if (! $skip_chr_check and $table_stem =~ /^chr/i and $genome_stem ne 'chr'){say "Error, genome file and matrix files do not have the same chromosome annotation. Cannot match UCSC or Ensembl style."; exit();}
 }
 
-say "processing using $ncpu cpu cores" if $verbose; 
+say "processing using $ncpu cpu cores" if $verbose;
 
 #process edit threshold data
 $low_thresh /= 100;
 $high_thresh /= 100;
 
 # define which bases will be looked at for conversion from the options, than adjust to DNA bases.
-my $noneditbase = (split("2",$experiment))[0]; 
+my $noneditbase = (split("2",$experiment))[0];
 my $editbase = (split("2",$experiment))[1];
 $noneditbase = "T" if $noneditbase eq "U";
 $editbase = "T" if $editbase eq "U";
 $editbase = "G" if $editbase eq "I";
 
 ### identify the reverse complement for negative strand
-my %complement = ("A"=>"T","T"=>"A","C"=>"G","G"=>"C"); 
+my %complement = ("A"=>"T","T"=>"A","C"=>"G","G"=>"C");
 my $noneditbaseREV = $complement{$noneditbase};
 my $editbaseREV = $complement{$editbase};
 
@@ -169,17 +190,16 @@ if( length $score && $score == 0){
 }
 say "Scoring will be done with following ratio : $score" if ($verbose and $score);
 
-
 ## manage different options for output files and formats
 my $out_fh;
 if ($OUTFILE){
 	$OUTFILE =~ /(.+)\.[^.]+$/;
 	my $path_name = $1;
-	
+
 	my $out_file= "$path_name".".bed";
 
 	open($out_fh,">", $out_file) or croak "Can't open $out_file for writing: $!\n";
-		
+
 	### print header of output file
 	say $out_fh join("\t", qq(\#chr start end gene score strand control_ratio control_total dart_ratio dart_total conversion)) unless ($score);
 	say $out_fh join("\t", qq(\#chr start end gene score strand control_ratio control_total dart_ratio dart_total conversion score)) if ($score);
@@ -198,7 +218,7 @@ if (@bedfiles){
 	foreach my $files (@bedfiles){
 	my $bed_stem = check_chr($files,0);
 	if (! $skip_chr_check and $bed_stem =~ /^chr/i and ! $annotation_stem =~ /^chr/i){say "Error, annotation file and bed files do not have the same chromosome annotation. Cannot match UCSC or Ensembl style."; exit();}
-	
+
 	open(my $fh, "<",  $files);
 	while(<$fh>){
 			next if $_=~/^[\#\n]/;
@@ -211,43 +231,37 @@ if (@bedfiles){
 }
 
 ## open annotation filehandle and store in %genes
-## there a 2 options: 
-## 1) with knownsites option: find sites in the region found in the provided bed file. 
+## there a 2 options:
+## 1) with knownsites option: find sites in the region found in the provided bed file.
 ## 2) look in all exons found in a refFlat file. Use --intron to detect in introns. --extUTR to extend 3'UTR for coding RNAs only.
-## Sites will be annotated from this gtf file. Priority is given as: 1(low): extended 3'UTR 2 : Introns 3: ncRNA 4: 5'UTR, 5: 3'UTR 6(high) : CDS	
+## Sites will be annotated from this gtf file. Priority is given as: 1(low): extended 3'UTR 2 : Introns 3: ncRNA 4: 5'UTR, 5: 3'UTR 6(high) : CDS
 
 my $genes = {};
 if($known_sites){
-	open(my $annotation_handle,"<", $known_sites) or die "Can't open $known_sites: $!\n";  
-
-	foreach my $line (<$annotation_handle>){  
+	open(my $annotation_handle,"<", $known_sites) or die "Can't open $known_sites: $!";
+	foreach my $line (<$annotation_handle>){
 		chomp $line;
 		next if ($line=~/^[\#\n]/);
 		my ($chr,$start,$end,$ID,$strand) = (split(/\t/,$line))[0,1,2,3,5];
-		
 		my $gene = (split(/\|/, $ID))[0];
-	
-		# say join("\t", $chr,$start,$end,$strand, $gene);
-	
 		my $length = $end - $start;
 		my $type="Known_site";
 
 		$genes->{'6'}->{$chr}->{$gene}->{length} = $length;
-		$genes->{'6'}->{$chr}->{$gene}->{$start} = {END=>$end,ID=>$gene,STRAND=>$strand,TYPE=>$type}; 
-
+		$genes->{'6'}->{$chr}->{$gene}->{$start} = {END=>$end,ID=>$gene,STRAND=>$strand,TYPE=>$type};
 	}
 	close $annotation_handle;
 }
 else{
-	open(my $annotation_handle,"<", $annotationfile) or die "Can't open $annotationfile: $!\n";   
+	open(my $annotation_handle,"<", $annotationfile) or die "Can't open $annotationfile: $!";
 	print STDERR "loading annotation file $annotationfile... " if $verbose;
 
-	foreach my $line (<$annotation_handle>)	{  
+	foreach my $line (<$annotation_handle>) {
 		chomp $line;
 		next if ($line=~/^[\#\n]/);
-		next if ($line=~/^name/); 
+		next if ($line=~/^name/);
 		my($gene,$trxid,$chr,$strand,$txStart,$txEnd,$cdsStart,$cdsEnd,$sString,$eString) = (split(/\t/,$line))[0,1,2,3,4,5,6,7,9,10];
-		my @starts = split(/\,/,$sString); 
+		my @starts = split(/\,/,$sString);
 		my @ends = split(/\,/,$eString);
 		my $length = $txEnd - $txStart;
 
@@ -255,7 +269,7 @@ else{
 
 		my @intronStart;
 		my @intronEnds;
-		
+
 		if ($intron_flag and $contain_introns)	{
 			my @intronStart;
 			my @intronEnds;
@@ -269,42 +283,37 @@ else{
 				push @intronEnds, $intron_end;
 			}
 
-			for (my $i = 0; $i <= $#intronStart;$i++){    
+			for (my $i = 0; $i <= $#intronStart;$i++){
 				my $type = "intron"; #default
 				$genes->{'2'}->{$chr}->{$trxid}->{length} = $length;
-				$genes->{'2'}->{$chr}->{$trxid}->{$intronStart[$i]} = {END=>$intronEnds[$i],ID=>$gene,STRAND=>$strand, TYPE=>$type}; 
+				$genes->{'2'}->{$chr}->{$trxid}->{$intronStart[$i]} = {END=>$intronEnds[$i],ID=>$gene,STRAND=>$strand, TYPE=>$type};
 			}
 		}
 
 		unless($cdsStart == $cdsEnd) ## case when ncRNA
 		{
-			
 			if ($extUTR){  # if extUTR option was used, add to 3'UTR of coding genes. coding only to avoid small sno/sn/U RNAs etc may be missing lncRNAs.
-			
 				if ($strand eq "+")	{
-					my $type = "3UTRe"; 
+					my $type = "3UTRe";
 					my $new_end = $ends[-1] + $extUTR;
-					
 					$genes->{'1'}->{$chr}->{$trxid}->{length} = $length;
-					$genes->{'1'}->{$chr}->{$trxid}->{$ends[-1]} = {END=>$new_end,ID=>$gene,STRAND=>$strand, TYPE=>$type}; 
+					$genes->{'1'}->{$chr}->{$trxid}->{$ends[-1]} = {END=>$new_end,ID=>$gene,STRAND=>$strand, TYPE=>$type};
 				}
 				else{
-					my $type = "3UTRe"; 
+					my $type = "3UTRe";
 					my $new_start = $starts[0] - $extUTR;
-
 					$genes->{'1'}->{$chr}->{$trxid}->{length} = $length;
-					$genes->{'1'}->{$chr}->{$trxid}->{$new_start} = {END=>$ends[-1],ID=>$gene,STRAND=>$strand, TYPE=>$type}; 
+					$genes->{'1'}->{$chr}->{$trxid}->{$new_start} = {END=>$ends[-1],ID=>$gene,STRAND=>$strand, TYPE=>$type};
 				}
 			}
-			
-			my $flag_5prime=0;
-			my $flag_3prime=0; 
 
-			for (my $i = 0; $i <= $#starts;$i++){    # define 5'UTR and 3'UTR regions in coding RNAs. For annotation purposes, creates new exon boundary
-			
+			my $flag_5prime=0;
+			my $flag_3prime=0;
+
+			for (my $i = 0; $i <= $#starts;$i++){
 				$flag_5prime = 1 if $ends[$i] == $cdsStart;
 				$flag_3prime = 1 if $ends[$i] == $cdsEnd;
-				
+
 				if ($ends[$i] > $cdsStart and $flag_5prime ==0){
 					push @starts, $cdsStart;
 					my $new_end = $cdsStart-1;
@@ -322,14 +331,13 @@ else{
 		@starts = sort { $a <=> $b } @starts;
 		@ends = sort { $a <=> $b } @ends;
 
-		for (my $i = 0; $i <= $#starts;$i++){   
+		for (my $i = 0; $i <= $#starts;$i++){
 			my $type;
 			if($cdsStart == $cdsEnd){
 				$type="ncRNA";
 			}
 			else{
 				$type = "CDS"; #default
-				
 				if($starts[$i] < $cdsStart){ $type = $strand eq "+" ? "5UTR" : "3UTR" ;}
 				if($starts[$i] > $cdsEnd){ $type = $strand eq "+" ? "3UTR" : "5UTR" ;}
 			}
@@ -354,7 +362,7 @@ else{
 	close $annotation_handle;
 }
 
-## When using a control dataset, we verify that the matrix file exist and is indexed. Then we extract the name of all chromosomes.   
+## When using a control dataset, we verify that the matrix file exist and is indexed. Then we extract the name of all chromosomes.
 my $index_list = {};
 unless ($genome)
 {
@@ -400,32 +408,29 @@ MCE::Loop->init(
 ## 2) We read the matrix file in parallel with a control matrix file and/or a handle to an indexed fasta file
 ## 3) We identitify to editing sites with the find_site() sub. These sites a printed to the output file
 ## 4) the sites found in the exluded file(s) are returned from the sub.
-
 my @filtered_sites = mce_loop
 {
 	my ($mce, $chunk_ref, $chunk_id)=@_;
 	my $chr = $_;
-	
+
 	my @bad_sites;
 	my ($control_fh, $dart_fh);
-		
+
 	unless ($genome){
 		return unless defined $index_list->{'control'}->{$chr};
 		open ( $control_fh, "tabix $ControlTableName $chr|") or say "can't read file $ControlTableName with tabix" and return;
 	}
-	
+
 	return unless defined $index_list->{'DART'}->{$chr};
 	open ( $dart_fh, "tabix $tablename $chr|") or say "can't read file $tablename with tabix" and return;
-	
-	my $pos_array_for = Array::IntSpan->new(); # initialize new ranges
-	my $pos_array_rev = Array::IntSpan->new();	
 
 	# prepare look up ranges for each type of mRNA features
+	my $pos_array_for = Array::IntSpan->new();
+	my $pos_array_rev = Array::IntSpan->new();
+
 	foreach my $type_order (sort {$a <=> $b}  keys %{$genes}){
 		foreach my $transcript ( sort { $genes->{$type_order}->{$chr}->{$a}->{length} <=> $genes->{$type_order}->{$chr}->{$b}->{length} } keys %{$genes->{$type_order}->{$chr}}){
-			# my ($strand,$type,$ID);
 			my ($left,$right);
-		
 			delete $genes->{$type_order}->{$chr}->{$transcript}->{length}; #remove length from hash once sorted in order to get only starts
 
 			foreach my $start (sort {$a <=> $b} keys %{$genes->{$type_order}->{$chr}->{$transcript}}) { 
@@ -443,10 +448,10 @@ my @filtered_sites = mce_loop
 					$pos_array_for->set_range($end,$start,$ID) if $strand eq "+";
 					$pos_array_rev->set_range($end,$start,$ID) if $strand eq "-";
 				}
-			} 
+			}
 		}
 	}
-	
+
 	my $last_control_line='';
 	my $last_dart_line='';
 	my $barcode='';
@@ -455,11 +460,16 @@ my @filtered_sites = mce_loop
 	my ($control_line, $control_flag) = read_matrix_line($control_fh, $last_control_line) unless ($genome);
 	my ($dart_line, $dart_flag) = read_matrix_line($dart_fh, $last_dart_line);
 
-	my $chrom_seq;
 	#load chromosome sequence in memory if needed. This will increase memory usage, but should decrease access time?
-	if ($genome or $fallback){
-		$chrom_seq=$dbFasta->seq($chr);
+my $chrom_seq = '';
+if ($genome or $fallback) {
+	my $loc = "$chr:1-" . $faidx->length($chr);
+	my ($seq, $len) = $faidx->get_sequence_no_length($loc);
+	if (!defined $seq || $seq eq '') {
+		($seq, $len) = $faidx->get_sequence($loc);
 	}
+	$chrom_seq = $seq // '';
+}
 
 	# process both edited matrix anx control matrix in parallel (unless genome option is used)
 	while($dart_line and ($control_line or $genome)){
@@ -473,7 +483,7 @@ my @filtered_sites = mce_loop
 			$ccoord = $ecoord;
 		}
 		# in case fall back option is used. when value is lower in absent in control matrix, fetch genomic coordinate
-		if($ecoord < $ccoord and $fallback and not $dart_flag or $control_flag)	{
+		if($ecoord < $ccoord and $fallback and not $dart_flag or $control_flag){
 			$control ={};
 			$ccoord = $ecoord;
 		}
@@ -483,22 +493,21 @@ my @filtered_sites = mce_loop
 		}
 		#case when control coordinates are lower than edit - no coverage at given position - read next line
 		elsif(($ecoord > $ccoord and not $control_flag or $dart_flag) and not $genome){
-			($control_line, $control_flag) = read_matrix_line($control_fh, $last_control_line); 
+			($control_line, $control_flag) = read_matrix_line($control_fh, $last_control_line);
 		}else{
 			my @outline;
 			my $dart_strand;
 			my $control_strand;
-	
+
 			if(defined $dart->{$ecoord}->{strand}){
 				if (defined $pos_array_for->lookup($ecoord) or defined $pos_array_rev->lookup($ecoord) ){
 					$dart_strand=$dart->{$ecoord}->{strand};
 					if (not defined $control->{$ecoord}->{strand}){
 						$control_strand = $dart_strand;# if no coverage, or genomic assign same strand
 					}else{
-						$control_strand = $control->{$ecoord}->{strand}; #otherwise get strand
+						$control_strand = $control->{$ecoord}->{strand};
 					}
 					if ($dart_strand eq $control_strand){ #when both strands are the same
-						
 						if ($dart_strand eq "-" and defined $pos_array_rev->lookup($ecoord)){
 							my $ID = $pos_array_rev->lookup($ecoord);
 							@outline = find_sites($chr, $ID, $ecoord, $dart_strand, $control, $dart, \$chrom_seq)
@@ -534,12 +543,12 @@ my @filtered_sites = mce_loop
 					my $ID = $pos_array_for->lookup($ecoord);
 					@outline = find_sites($chr, $ID, $ecoord, $strand, $control, $dart, \$chrom_seq);
 				}
-			
+
 				if (@outline){
 					my $strand = $outline[5];
 					push(@outline, $barcode) if $barcode_option; # add barcode when processing them
 					my $result = join("\t", @outline);
-					if (defined $excluded_sites->{$chr}->{$ecoord})	{push(@bad_sites, $result);}
+					if (defined $excluded_sites->{$chr}->{$ecoord}){push(@bad_sites, $result);}
 					else{MCE->say ($out_fh, $result);}
 					@outline = ();
 				}
@@ -551,52 +560,49 @@ my @filtered_sites = mce_loop
 				if (@outline){
 					my $strand = $outline[5];
 					push(@outline, $barcode) if $barcode_option;
-			
 					my $result = join("\t", @outline);
 
 					if (defined $excluded_sites->{$chr}->{$ecoord}){push(@bad_sites, $result);}
 					else{MCE->say ($out_fh, $result);}
 					@outline = ();
 				}
-			$dart ={};
-			$control = {};			
-			
-			($dart_line, $dart_flag) = read_matrix_line($dart_fh, $last_dart_line); # read next line
+				$dart ={};
+				$control = {};
 
+				($dart_line, $dart_flag) = read_matrix_line($dart_fh, $last_dart_line);
 			}
 
-		$last_control_line = $control_line;
-		$last_dart_line = $dart_line;
+			$last_control_line = $control_line;
+			$last_dart_line = $dart_line;
 
 		}
 	}
 	close ($dart_fh);
 	delete $excluded_sites->{$chr} if defined $excluded_sites->{$chr};
-	delete $genes->{$chr}; 
+	delete $genes->{$chr};
 	MCE->gather(@bad_sites);
 	MCE->exit(42, "$chr");
 }\@chr_list;
 
-# sort output files and print excluded_sites if requested
 if ($OUTFILE){
 	$OUTFILE =~ /(.+)\.[^.]+$/;
 	my $path_name = $1;
 	my $out_file= "$path_name".".bed";
 	my $temp = $out_file . ".tmp";
-	
+
 	say "sorting $out_file" if $verbose;
 	system("head -1 $out_file >  $temp");
 	system("tail -n +2 $out_file | sort -k1,1 -k2,2n -k5,5n -k12,12 >> $temp");
 	system("mv $temp $out_file");
-	
+
 	if ($bed_option){
 		print_bed($out_file);
 	}
 
-	if (@bedfiles)	{
+	if (@bedfiles){
 		my $excluded_sites = @filtered_sites;
 		say STDERR "$excluded_sites were excluded from the analysis";
-		if ($bed_flag)	{
+		if ($bed_flag){
 			my $out_file= "$path_name".".excluded_sites.bed";
 			say "Excluded sites are found in $out_file";
 			open (my $fh, ">", $out_file) or die "Can't open $out_file for writing:$!";
@@ -604,7 +610,7 @@ if ($OUTFILE){
 				say $fh $lines;
 			}
 			close $fh;
-		} 
+		}
 	}
 }
 else{
@@ -623,11 +629,10 @@ sub error_out {
 print STDERR <<'USAGE::BLOCK';
 
 Find_edit_site identifies editing sites in RNAseq dataset by comaparing a matrix of coverage to another or to the sequence of a provided genome. The detection will be done only at positions identified in a reference sequence file (refFlat).
-Sites can be filtered through a minimal coverage, minimum and maximum editing percentage and on a threshold of editing in the control matrix. 
+Sites can be filtered through a minimal coverage, minimum and maximum editing percentage and on a threshold of editing in the control matrix.
 Filterering based on a score based on the probability of edinting based on the beta distribution of nucleotides in the edited matrix over the control matrix is also available with the --score option.
 
-complete list of options: 
-
+complete list of options:
 	--annotationFile	: mm10 FlatRef Annotation file (s)
 	--controlMatrix		: control count matrix (wtRNA or mutYTH) (s)
 	--EditedMatrix		: DART RNA count matrix (s)
@@ -657,18 +662,16 @@ USAGE::BLOCK
 
 }
 
-## subroutine to read next matrix line
-## we take in the filehandle and the valid last line. We return the next line and the 0 flag. If end of file is reached, we return last line and the 1 FLAG. 
 sub read_matrix_line {
 	my $fh = shift @_;
 	my $last_line = shift @_;
-		
+
 	if ($fh and my $line = <$fh>){
 		chomp $line;
 		return ($line,"0");
 	}
 	else{
-		return ($last_line,"1"); 
+		return ($last_line,"1");
 	}
 }
 
@@ -698,7 +701,6 @@ sub load_line {
 ## it finds sites with passing the coverage threshold, mutation thresholds and fold over controls. Optionally return score based on beta distribution
 sub find_sites {
 	#my ($chr, $ID, $bp, $strand, $control, $dart, $dbFasta) = @_;
-	
 	my $chr = shift @_;
 	my $ID = shift @_;
 	my $bp = shift @_;
@@ -708,32 +710,30 @@ sub find_sites {
 	my $chrom_seq_ref = shift @_;
 
 	#load DART site first, avoid fetching genomic sequencing when using the genome option
+	my $dart_non_edit = ($strand eq '+') ? $dart->{$bp}->{$noneditbase} : $dart->{$bp}->{$noneditbaseREV};
+	my $dart_edit = ($strand eq '+') ? $dart->{$bp}->{$editbase} : $dart->{$bp}->{$editbaseREV};
 
-	my $dart_non_edit = ($strand eq '+') ? $dart->{$bp}->{$noneditbase} : $dart->{$bp}->{$noneditbaseREV}; 
-	my $dart_edit = ($strand eq '+') ? $dart->{$bp}->{$editbase} : $dart->{$bp}->{$editbaseREV}; 
-	
-	return if ($dart_non_edit + $dart_edit == 0); 
+	return if ($dart_non_edit + $dart_edit == 0);
 	return unless ($dart_edit >= $min_edit_site);
 
-	my $dart_total = $dart->{$bp}->{total} - $dart->{$bp}->{N}; 
-	return if  $dart_total < $Edited_mincovthresh; 
-	
+	my $dart_total = $dart->{$bp}->{total} - $dart->{$bp}->{N};
+	return if  $dart_total < $Edited_mincovthresh;
+
 	my $dart_edit_ratio = $dart_edit / $dart_total;
-	return if ($dart_edit_ratio < $low_thresh or $dart_edit_ratio > $high_thresh); 
-	
+	return if ($dart_edit_ratio < $low_thresh or $dart_edit_ratio > $high_thresh);
+
 	my $dart_others = $dart_total - $dart_non_edit - $dart_edit;
 	my $other_ratio  = $dart_others/$dart_total;
 	if ($max_bkg){
 		return if $other_ratio >= $max_bkg; # return if ratio of mutations is higher than max allowed levels of background mutation 
 	}
-	if ($bkg_ratio){ 
+	if ($bkg_ratio){
 		return if ($dart_edit_ratio <= $other_ratio * $bkg_ratio);
-	} 
-	
+	}
+
 	my $dart_edit_ratio_out = sprintf( "%.4f", $dart_edit_ratio);
 
 	my $dart_edit_conf;
-	# calculate confidence based on beta distribution
 	if ($score){
 	$dart_edit_conf = pbeta($low_thresh, $dart_edit,$dart_non_edit); # get probability that value is higher than minimal threshold using beta distribution
 	$dart_edit_conf = 1 unless length $dart_edit_conf; # This is to avoid division by zero when no significance is found
@@ -741,7 +741,7 @@ sub find_sites {
 	}
 
 	#process control 
-	my ($control_non_edit,$control_edit, $control_total, $base); #declare variables
+	my ($control_non_edit,$control_edit, $control_total, $base);
 	if ($genome or ($fallback and (! defined $control->{$bp}->{'total'} or $control->{$bp}->{'total'} < $Control_mincovthresh))){
 		my $nuc = uc(substr ($$chrom_seq_ref, $bp-1, 1));
 		$control = getEmptyHash($bp, $nuc);
@@ -753,7 +753,7 @@ sub find_sites {
 	return if $control_total < $Control_mincovthresh;
 
 	# check if non edit in control is at least 60%. avoids divisions by 0 in some cases. Should eliminate SNPs hets ~50% and remove highly edited sites
-	return if $control_non_edit / $control_total < 0.60; 
+	return if $control_non_edit / $control_total < 0.60;
 
 	#edit for output
 	my $control_edit_ratio = $control_edit / $control_total;
@@ -784,7 +784,7 @@ sub find_sites {
 
 	if ($control_edit_ratio_out){
 		$ID = $ID . "|" . sprintf( "%.4f", $dart_edit_ratio/$control_edit_ratio);
-	} 
+	}
 	else{
 		$ID = $ID . "|NA" ;
 	}
@@ -822,10 +822,10 @@ sub getEmptyHash{
 }
 
 ## helper sub
-sub log10 { 
-    my $n = shift; 
-    return log($n) / log(10); 
-} 
+sub log10 {
+    my $n = shift;
+    return log($n) / log(10);
+}
 
 ## check that all files have the same types of chrmosomes in first column eg.: chr1 vs 1
 sub check_chr{
@@ -837,7 +837,7 @@ sub check_chr{
 		}else{
 		open($fh, "zcat $file | head -5 |") or die "Cannot open ($file) for reading: $!\n";
 		}
-	} 
+	}
 	else{
 		open($fh, '<', $file) or die "Cannot open ($file) for reading: $!";
 	}
@@ -867,7 +867,7 @@ sub print_bed{
 	foreach (<$fh>){
 		next if $_=~/^[\#\n]/;
 		my @out = (split("\t",$_))[0..5];
-		my $barcode = (split("\t",$_))[-1] if $barcode_option;;
+		my $barcode = (split("\t",$_))[-1] if $barcode_option;
 		push @out, $barcode  if $barcode_option;
 		my $out = join("\t", @out);
 		say $bed_fh $out;
