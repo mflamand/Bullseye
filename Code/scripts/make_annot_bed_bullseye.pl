@@ -1,151 +1,145 @@
 #!/usr/bin/perl
 
-# Modified from metaPlotR by Mathieu Flamand, Université Laval, 2023-7-20
-# Use Bio::DB::Fasta instead of Bio::IO::seq
-# Provided genome can now be a single fasta file or a directory with several fasta. Missing chromosomes will be skipped
+# Modified from metaPlotR by Mathieu Flamand, Université Laval, 2026-5-23
+# Use Bio::DB::HTS::Faidx instead of Bio::DB::Fasta
+# Fetch each exon once, then iterate over the exon sequence string
+# Requires a fasta file with .fai index or a bgziped fasta file with index 
 
 use strict;
 use warnings;
-use Bio::DB::Fasta;
+use Bio::DB::HTS::Faidx;
 use Getopt::Long;
 
-# Store command line arguements
- my $genomeDir = '';
- my $genePred = '';	
- GetOptions ('genomeDir=s' => \$genomeDir, 'genePred=s' => \$genePred); #maybe add option for single multifasta file
+my $genomeDir = '';
+my $genePred  = '';
+GetOptions ('genomeDir=s' => \$genomeDir, 'genePred=s' => \$genePred);
 
-# Check command line args are minimally valid
 &checkArgs($genomeDir, $genePred) || die "Check command line arguments: $!";
 
-# Annotate every genic nucleotide
-open (my $annot, "<", "$genePred")  || die "Cant open genePred file: $!";
-my $dbFasta = Bio::DB::Fasta->new($genomeDir);
-my @IDs = $dbFasta->get_all_primary_ids;
+open (my $annot, "<", "$genePred") || die "Cant open genePred file: $!";
 
-my %ID_hash;
-foreach my $id(@IDs){
-	$ID_hash{$id}=1;
-}
+my $db = Bio::DB::HTS::Faidx->new($genomeDir);
+
+my @IDs = $db->get_all_sequence_ids();
+my %ID_hash = map { $_ => 1 } @IDs;
 
 my $counter = 0;
-my $chrom_seq;
-my $last_chr = '';
 
-while (my $line = <$annot>){
-	chomp ($line);
-    next if ($line=~/^[\#\n]/);
-	# Split line and assign variables
-	my @temp = split(/\t/, $line);
-	my ($transcript_ID, $chr, $strand) = @temp[1..3];
-	my ($txStart, $txEnd, $cdsStart, $cdsEnd) = @temp[4..7];
-	my $exonCount = $temp[8];
-	my @exonFrame = split(/,/, $temp[-1]);
-	my @exon_starts = split (/,/, $temp[9]);
-	my @exon_ends = split (/,/, $temp[10]);
-	my $gene_name = $temp[12];
+while (my $line = <$annot>) {
+    chomp($line);
+    next if ($line =~ /^[\#\n]/);
 
-	#Skip if chomosome does not exist in fasta
+    my @temp = split(/\t/, $line);
+    my ($transcript_ID, $chr, $strand) = @temp[1..3];
+    my ($txStart, $txEnd, $cdsStart, $cdsEnd) = @temp[4..7];
+    my $exonCount = $temp[8];
+    my @exonFrame = split(/,/, $temp[-1]);
+    my @exon_starts = split(/,/, $temp[9]);
+    my @exon_ends   = split(/,/, $temp[10]);
+    my $gene_name   = $temp[12];
 
-	next unless defined $ID_hash{$chr};
+    next unless defined $ID_hash{$chr};
 
-	# Load genomic sequence of chromosome (if necessary)
-	if ($chr ne $last_chr){
-		$chrom_seq = $dbFasta->seq($chr);
-		$last_chr = $chr;
-	}
+    my $gene_size = 0;
+    my $num_exons = scalar(@exon_starts);
+    for (my $i = 0; $i < $num_exons; $i++) {
+        $gene_size += abs($exon_ends[$i] - $exon_starts[$i]);
+    }
 
-	# Determine size of transcript
-	my $gene_size = 0;
-	my $num_exons = scalar (@exon_starts);
-	for (my $i = 0; $i < $num_exons; $i++){
-		$gene_size += abs ($exon_ends[$i] - $exon_starts[$i]);
-	}
+    $txStart  = $txStart + 1;
+    $cdsStart = $cdsStart + 1;
+    foreach my $x (@exon_starts) {
+        $x = $x + 1;
+    }
 
-	# Conversion from 0-based to 1-based coordinates
-	$txStart = $txStart + 1;
-	$cdsStart = $cdsStart + 1;
-	foreach my $x (@exon_starts){
-		$x = $x + 1
-	}
+    my $nucl_j = -1;
+    my $count   = 0;
 
-	# Label the exonic loci
-	my $nucl_j = -1;
-	my $count = 0;
-	my @temp_out = ();
+    for (my $i = 0; $i < $exonCount; $i++) {
+        my $exon_start = $exon_starts[$i];
+        my $exon_end   = $exon_ends[$i];
 
-	for (my $i = 0; $i < $exonCount; $i++){ # Go through each exon delimiter
-		foreach my $coord (($exon_starts[$i])..($exon_ends[$i])){ # Go through each position of the exon
-			$count++;
-			my $mrna_pos = &determine_mrna_pos($strand, \$gene_size, $count);
-			my $feature = &utrs_or_cds($coord, $strand, $txStart, $txEnd, $cdsStart, $cdsEnd);
-			my $nucleotide = uc(substr ($chrom_seq, $coord-1, 1));
-			my $codon_pos = &determine_codon_pos($feature, $nucl_j, $strand);
+        my $location = $chr . ":" . $exon_start . "-" . $exon_end;
+        my $exon_seq = uc($db->get_sequence_no_length($location));
 
-			print $chr, "\t", $coord-1, "\t", $coord, "\t", join('|', ($transcript_ID, $gene_name, $feature, $mrna_pos)), "\t";
-			print $nucleotide, "\t", $strand, "\n";
-		}
-	}
+        next unless defined $exon_seq && $exon_seq ne '';
+
+        my $exon_len = length($exon_seq);
+
+        for (my $offset = 0; $offset < $exon_len; $offset++) {
+            my $coord = $exon_start + $offset;
+
+            $count++;
+            my $mrna_pos = &determine_mrna_pos($strand, \$gene_size, $count);
+            my $feature  = &utrs_or_cds($coord, $strand, $txStart, $txEnd, $cdsStart, $cdsEnd);
+            my $nucleotide = substr($exon_seq, $offset, 1);
+            my $codon_pos  = &determine_codon_pos($feature, $nucl_j, $strand);
+
+            print $chr, "\t", $coord - 1, "\t", $coord, "\t",
+                  join('|', ($transcript_ID, $gene_name, $feature, $mrna_pos)), "\t",
+                  $nucleotide, "\t", $strand, "\n";
+        }
+    }
 }
 
-######################### sub routunes ##########################
-sub determine_codon_pos(){
-	my ($feature, $nucl_j, $strand) = @_;
-	my $codon_pos = 'NA';
+sub determine_codon_pos() {
+    my ($feature, $nucl_j, $strand) = @_;
+    my $codon_pos = 'NA';
 
-	if ($feature eq 'cds'){
-		$nucl_j++;
-		$codon_pos = $nucl_j % 3;
+    if ($feature eq 'cds') {
+        $nucl_j++;
+        $codon_pos = $nucl_j % 3;
 
-		# correct $codon_pos for strandedness
-		if ($strand eq '-'){
-			if ($codon_pos == 0){ $codon_pos = 2; }
-			elsif ($codon_pos == 2){ $codon_pos = 0; }
-		}
-	}
-	return $codon_pos;
+        if ($strand eq '-') {
+            if ($codon_pos == 0) { $codon_pos = 2; }
+            elsif ($codon_pos == 2) { $codon_pos = 0; }
+        }
+    }
+    return $codon_pos;
 }
 
-sub determine_mrna_pos(){
-	my ($strand, $gene_size_ref, $count) = @_;
-	my $mrna_pos = $count;
-	if ($strand eq '-'){
-		$mrna_pos = $$gene_size_ref;
-		$$gene_size_ref -= 1;
-	}  
-	return $mrna_pos;
+sub determine_mrna_pos() {
+    my ($strand, $gene_size_ref, $count) = @_;
+    my $mrna_pos = $count;
+    if ($strand eq '-') {
+        $mrna_pos = $$gene_size_ref;
+        $$gene_size_ref -= 1;
+    }
+    return $mrna_pos;
 }
 
-sub checkArgs(){
-	my ($genDir, $genPred) = @_;
-	my $pass = 1;
-	if (! -d $genDir and ! -f $genDir){
-		print "No such directory exists: $genDir \n";
-		$pass = 0;
-	}
-	if (! -f $genPred){
-		print "No such file exists: $genDir \n";
-		$pass = 0;
-	}
-	return ($pass);
+sub checkArgs() {
+    my ($genDir, $genPred) = @_;
+    my $pass = 1;
+    if (! -d $genDir and ! -f $genDir) {
+        print "No such directory exists: $genDir \n";
+        $pass = 0;
+    }
+    if (! -f $genPred) {
+        print "No such file exists: $genDir \n";
+        $pass = 0;
+    }
+    return ($pass);
 }
 
-sub utrs_or_cds (){
-	my ($coord, $strand, $txStart, $txEnd, $cdsStart, $cdsEnd) = @_;
-	my $feature = 'na';
-	#my ($utr5, $cds, $utr3) = (0,0,0);
+sub utrs_or_cds () {
+    my ($coord, $strand, $txStart, $txEnd, $cdsStart, $cdsEnd) = @_;
+    my $feature = 'na';
 
-	if( abs($cdsStart - $cdsEnd) <= 1){ ## really if the cdsStart = cdsEnd.  Need to specify this way due to 0 => 1 based conversion.
-		$feature = 'ncRNA';
-	}
-	elsif ($coord >= $txStart && $coord < $cdsStart){
-		if ($strand eq '+'){$feature = '5utr';}
-		else {$feature = '3utr';}
-	}
-	elsif ($coord > $cdsEnd && $coord <= $txEnd){
-		if ($strand eq '+'){$feature = '3utr';}
-		else {$feature = '5utr';}
-	}
-	else{$feature = 'cds';}
+    if (abs($cdsStart - $cdsEnd) <= 1) {
+        $feature = 'ncRNA';
+    }
+    elsif ($coord >= $txStart && $coord < $cdsStart) {
+        if ($strand eq '+') { $feature = '5utr'; }
+        else                { $feature = '3utr'; }
+    }
+    elsif ($coord > $cdsEnd && $coord <= $txEnd) {
+        if ($strand eq '+') { $feature = '3utr'; }
+        else                { $feature = '5utr'; }
+    }
+    else {
+        $feature = 'cds';
+    }
 
-	return ($feature);
+    return $feature;
 }

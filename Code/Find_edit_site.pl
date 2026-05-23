@@ -2,7 +2,7 @@
 
 ### Author : Mathieu Flamand - Universite Laval
 ### version : 1.6.1
-### date of last modification : 2026-05-22
+### date of last modification : 2026-05-23
 
 ### This programs identifies editing sites by comparing a DART/TRIBE matrix to a control matrix file or to the genomic sequence.
 ### For strand information, a refFlat file is provided, sites found within annotated features will be identified according to provided settings.
