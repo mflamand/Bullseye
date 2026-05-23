@@ -4,7 +4,13 @@ channels:
  - bioconda
 dependencies:
  - gcc_linux-64
- - perl-bioperl=1.7.2
- - htslib=1.12
- - samtools=1.12
- - bedtools=2.30.0
+ - perl-bioperl
+ - htslib
+ - samtools
+ - bedtools
+ - perl-text-nsp
+ - perl-mce
+ - perl-array-intspan
+ - perl-bio-db-hts
+ - perl-math-cdf
+
