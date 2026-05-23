@@ -23,7 +23,7 @@ Bullseye is a set of Perl script, but make heavy use of Samtools for reading and
 ## Installation of prerequisite softwares
 Prerequisites:
 
-Perl > 5.26 Samtools Bedtools Tabix Perl modules MCE, Math::CDF and Bio::DB::Fasta
+Perl > 5.26 Samtools Bedtools Tabix Perl modules MCE, Math::CDF and Bio::DB::HTS::Faidx
 
 The easiest way to get everything up and running without root access is through conda.
 create the conda environment with the provided yml file and activate the environment
@@ -31,23 +31,6 @@ create the conda environment with the provided yml file and activate the environ
 	conda env create -f bullseye.yml
 
 	conda activate Bullseye
-
-#### then install Bio::DB::Fasta
-XML::Parser is required for Bio::DB::Fasta, but causes problems with conda/cpanm. I opt to install it manually, providing the expat library path:
-
-	wget http://www.cpan.org/authors/id/T/TO/TODDR/XML-Parser-2.46.tar.gz 
-	tar -xf XML-Parser-2.46.tar.gz
-	cd XML-Parser-2.46 
-	perl Makefile.PL EXPATLIBPATH=$CONDA_PREFIX/lib EXPATINCPATH=$CONDA_PREFIX/include
-	make
-	make install
-
-To install the remaining perl packages:
-
-	cpanm Bio::DB::Fasta
-	cpanm Text::NSP
-	cpanm Array::IntSpan
-	cpanm MCE
 
 For the use of Bullseye in the detection of m6A in single cells, see: 
 
