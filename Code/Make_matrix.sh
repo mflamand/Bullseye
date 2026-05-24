@@ -10,7 +10,7 @@
 file=$(ls *.bam | sed -n ${SLURM_ARRAY_TASK_ID}p)   ### can change ls to subset the analysis to some bam files (.sorted.bam)
 STEM=$(basename "$file" .bam)  
 
-SOFTWARE=/datacommons/meyerlab/DARTseq/Bullseye/
+SOFTWARE=/path/to/Bullseye/
 
 ####### list of options for parseBAM.pl #######
 # This program will build a matrix of nucleotide count for every positions mapped in a bam file:

@@ -161,12 +161,12 @@ Steps 1 through 3 are performed as for TRIBE-STAMP, to identify editing sites in
     --verbose
     ```
 
-    We can then gather the information in a table containing the coverage and the number of mutation at each site using gather_score.pl:
+    We can then gather the information in a table containing the coverage and the number of mutation at each site using gather_scores.pl:
 
     ```{bash}
-     perl gather_score.pl --coverage --mutations --outfile DF1_ADAR.txt DF1_ADAR*.txt # with all files generated in previous step as input
+     perl gather_scores.pl --coverage --mutations --outfile DF1_ADAR.txt DF1_ADAR*.txt # with all files generated in previous step as input
 
-     perl gather_score.pl --coverage --mutations --outfile DF2_APOBEC.txt *DF2_APOBEC1*.txt 
+     perl gather_scores.pl --coverage --mutations --outfile DF2_APOBEC.txt *DF2_APOBEC1*.txt 
     ```
 
     The output of this script will be 2 matrix containing a single line for each site, and the coverage or number of mutation for each biological replicate for the files provided. (e.g. DF1_ADAR.coverage.txt and DF1_ADAR.mutations.txt are generated when providing the --coverage and --mutations options)

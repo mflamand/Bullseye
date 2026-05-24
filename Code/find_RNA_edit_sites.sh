@@ -27,8 +27,8 @@
 #Run as sbatch -a 1-n find_RNA_edit_sites.sh dart.file control.file.1 control.file.2 control.file.3 ...
 
 annotation_file=./mm10.Apc.refFlat
-GENOME=/datacommons/meyerlab/userdata/mf229/mm10/genome/All/mm10_ucsc.fa
-SOFTWARE=/datacommons/meyerlab/DARTseq/Bullseye/
+GENOME=/path/to/genome/mm10_ucsc.fa
+SOFTWARE=/path/to/Bullseye/
 
 file=$1
 dart=$(basename $file .matrix.gz)
@@ -41,7 +41,7 @@ then
 	echo "Please input at least 2 files for comparison"
 	exit 
 else
-	perl $SOFTWARE/Find_edit_site.pl --annotationFile $annotation_file \
+	perl $SOFTWARE/Find_edit_sites.pl --annotationFile $annotation_file \
 	--EditedMatrix $dart.matrix.gz \
 	--controlMatrix $control.matrix.gz \
 	--editType C2U \
