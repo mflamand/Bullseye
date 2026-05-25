@@ -658,7 +658,7 @@ complete list of options:
 	
 USAGE::BLOCK
 
-	exit (1);
+	exit (0);
 
 }
 

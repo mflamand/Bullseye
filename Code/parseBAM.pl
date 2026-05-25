@@ -387,7 +387,7 @@ This program will build a matrix of nucleotide count for every positions mapped 
     --exclude: bed file with coordinates for regions to be skipped. (eg. Ribosomal RNAs.) 
 	
 EOF
-    exit(1);
+    exit(0);
 }
 
 
