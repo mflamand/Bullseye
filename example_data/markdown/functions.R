@@ -55,7 +55,7 @@ glm_comp_bbn<-function(df, design, lev,comp){
     test_res<-try(vcov(mod),silent=TRUE)
   }
   
-  if(is.null(test_res) ){.   ###|| class(test_res)=="try-error"
+  if(is.null(test_res) ){   ###|| class(test_res)=="try-error"
     p<-as.vector(rep(NA,length(lev)),mode="list")
     names(p)<-lev
     return(p)
@@ -83,7 +83,8 @@ glm_comp_bbn<-function(df, design, lev,comp){
       
       mat <- qr.solve(L %*% V %*% t(L))
       stat <- t(f - H0) %*% mat %*% (f - H0)
-      p[x] <- 1 - pchisq(stat, df = nrow(L))
+      #p[x] <- 1 - pchisq(stat, df = nrow(L))
+      p[x] <- pchisq(stat, df = nrow(L), lower.tail = FALSE)
       n[x] <- names(b)[x]
     }
 
@@ -342,7 +343,8 @@ Bullseye<-function(data_cov,data_mut, colData=NULL, filter.col=NULL, filter.with
   
   
   if (!is.null(filter.sites)){
-    R.utils::printf("Filtering sites with less than %.1f %% editing", min*100)
+    #R.utils::printf("Filtering sites with less than %.1f %% editing", min*100)
+    cat(sprintf("Filtering sites with less than %.1f %% editing\n", min * 100))
     if (filter.sites == "called"){
       data_edit_A<-data_edit_A %>%
         dplyr::filter(baseEdit >= min)
